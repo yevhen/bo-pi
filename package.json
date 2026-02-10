@@ -1,0 +1,20 @@
+{
+  "name": "bo-pi",
+  "version": "0.0.1",
+  "description": "Pi extensions for tool preflight approvals.",
+  "license": "MIT",
+  "keywords": ["pi-package"],
+  "type": "module",
+  "pi": {
+    "extensions": ["./extensions"]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "files": [
+    "extensions",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ]
+}
