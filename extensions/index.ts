@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -32,7 +32,8 @@ interface SessionConfigEntryData {
 const SESSION_ENTRY_TYPE = "bo-pi-config";
 const ANSI_RESET = "\u001b[0m";
 const ANSI_ACTION = "\u001b[38;5;110m";
-const ANSI_WARNING = "\u001b[1;38;5;203m";
+const ANSI_DESTRUCTIVE = "\u001b[1;38;5;203m";
+const ANSI_SCOPE_WARNING = "\u001b[38;5;222m";
 const ANSI_MUTED = "\u001b[38;5;244m";
 const DEFAULT_CONFIG: PreflightConfig = {
 	enabled: true,
@@ -602,12 +603,13 @@ async function collectApprovals(
 		const metadata = preflight[toolCall.id];
 		const summary = metadata?.summary ?? "Review requested action";
 		const destructive = metadata?.destructive ?? false;
-		const scopeLine = metadata?.scope?.length ? formatScopeLine(`Scope: ${metadata.scope.join(", ")}`) : undefined;
-		const warningLine = destructive ? formatWarningLine("Destructive action") : undefined;
-		const detailLines = [warningLine, scopeLine].filter(Boolean);
+		const scopeText = metadata?.scope?.length ? `Scope: ${metadata.scope.join(", ")}` : undefined;
+		const scopeWarn = scopeText ? isScopeOutsideWorkspace(metadata?.scope ?? [], ctx.cwd) : false;
+		const scopeLine = scopeText ? formatScopeLine(scopeText, scopeWarn) : undefined;
+		const detailLines = [scopeLine].filter(Boolean);
 		const details = detailLines.length > 0 ? `\n\n${detailLines.join("\n")}` : "";
-		const message = `${formatActionLine(summary)}${details}`;
-		const title = "Agent wants to";
+		const message = `${formatActionLine(summary, destructive)}${details}`;
+		const title = formatTitleLine("Agent wants to:");
 		const allow = await ctx.ui.confirm(title, message);
 		approvals[toolCall.id] = allow
 			? { allow: true }
@@ -637,16 +639,44 @@ function sanitizeSummary(summary: string | undefined, toolCall: ToolCallSummary)
 	return cleaned ? capitalizeFirst(cleaned) : undefined;
 }
 
-function formatActionLine(text: string): string {
-	return `${ANSI_ACTION}${text}${ANSI_RESET}`;
-}
-
-function formatWarningLine(text: string): string {
-	return `${ANSI_WARNING}${text}${ANSI_RESET}`;
-}
-
-function formatScopeLine(text: string): string {
+function formatTitleLine(text: string): string {
 	return `${ANSI_MUTED}${text}${ANSI_RESET}`;
+}
+
+function formatActionLine(text: string, destructive: boolean): string {
+	const color = destructive ? ANSI_DESTRUCTIVE : ANSI_ACTION;
+	return `${color}${text}${ANSI_RESET}`;
+}
+
+function formatScopeLine(text: string, warn: boolean): string {
+	const color = warn ? ANSI_SCOPE_WARNING : ANSI_MUTED;
+	return `${color}${text}${ANSI_RESET}`;
+}
+
+function isScopeOutsideWorkspace(scopes: string[], cwd: string): boolean {
+	const basePath = resolve(cwd);
+	for (const scope of scopes) {
+		const resolvedScope = resolveScope(scope, cwd);
+		if (!resolvedScope) continue;
+		if (!isPathWithin(resolvedScope, basePath)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function resolveScope(scope: string, cwd: string): string | undefined {
+	if (!scope) return undefined;
+	const expanded = expandTilde(scope);
+	const resolved = isAbsolute(expanded) ? resolve(expanded) : resolve(cwd, expanded);
+	return resolved;
+}
+
+function isPathWithin(targetPath: string, basePath: string): boolean {
+	const normalizedTarget = resolve(targetPath);
+	const normalizedBase = resolve(basePath);
+	if (normalizedTarget === normalizedBase) return true;
+	return normalizedTarget.startsWith(`${normalizedBase}${sep}`);
 }
 
 function escapeRegExp(value: string): string {
