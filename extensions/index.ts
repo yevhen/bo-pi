@@ -30,6 +30,10 @@ interface SessionConfigEntryData {
 }
 
 const SESSION_ENTRY_TYPE = "bo-pi-config";
+const ANSI_RESET = "\u001b[0m";
+const ANSI_ACTION = "\u001b[38;5;110m";
+const ANSI_WARNING = "\u001b[1;38;5;203m";
+const ANSI_MUTED = "\u001b[38;5;244m";
 const DEFAULT_CONFIG: PreflightConfig = {
 	enabled: true,
 	contextMessages: 12,
@@ -598,12 +602,12 @@ async function collectApprovals(
 		const metadata = preflight[toolCall.id];
 		const summary = metadata?.summary ?? "Review requested action";
 		const destructive = metadata?.destructive ?? false;
-		const scopeLine = metadata?.scope?.length ? `Scope: ${metadata.scope.join(", ")}` : undefined;
-		const warningLine = destructive ? formatWarningLine("DESTRUCTIVE ACTION") : undefined;
+		const scopeLine = metadata?.scope?.length ? formatScopeLine(`Scope: ${metadata.scope.join(", ")}`) : undefined;
+		const warningLine = destructive ? formatWarningLine("Destructive action") : undefined;
 		const detailLines = [warningLine, scopeLine].filter(Boolean);
 		const details = detailLines.length > 0 ? `\n\n${detailLines.join("\n")}` : "";
-		const message = `${summary}${details}`;
-		const title = "Allow agent to:";
+		const message = `${formatActionLine(summary)}${details}`;
+		const title = "Agent wants to";
 		const allow = await ctx.ui.confirm(title, message);
 		approvals[toolCall.id] = allow
 			? { allow: true }
@@ -633,8 +637,16 @@ function sanitizeSummary(summary: string | undefined, toolCall: ToolCallSummary)
 	return cleaned ? capitalizeFirst(cleaned) : undefined;
 }
 
+function formatActionLine(text: string): string {
+	return `${ANSI_ACTION}${text}${ANSI_RESET}`;
+}
+
 function formatWarningLine(text: string): string {
-	return `\u001b[1;33m${text}\u001b[0m`;
+	return `${ANSI_WARNING}${text}${ANSI_RESET}`;
+}
+
+function formatScopeLine(text: string): string {
+	return `${ANSI_MUTED}${text}${ANSI_RESET}`;
 }
 
 function escapeRegExp(value: string): string {
