@@ -18,7 +18,7 @@ type ConfigScope = "session" | "persistent";
 
 type ModelRef = { provider: string; id: string };
 
-type ApprovalMode = "all" | "destructive" | "off";
+type ApprovalMode = "all" | "destructive";
 
 interface PreflightConfig {
 	enabled: boolean;
@@ -99,10 +99,9 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		const preflight = preflightResult.metadata;
-		const approvals =
-			activeConfig.approvalMode === "off" || !ctx.hasUI
-				? undefined
-				: await collectApprovals(event.toolCalls, preflight, ctx, activeConfig, logDebug);
+		const approvals = ctx.hasUI
+			? await collectApprovals(event.toolCalls, preflight, ctx, activeConfig, logDebug)
+			: undefined;
 		if (approvals && Object.keys(approvals).length > 0) {
 			logDebug(`Preflight approvals collected for ${Object.keys(approvals).length} tool call(s).`);
 		}
@@ -172,9 +171,15 @@ async function handlePreflightCommand(args: string, ctx: ExtensionContext, pi: E
 	}
 
 	if (action === "approvals" || action === "approval") {
+		const rawMode = parts.slice(1).join(" ").trim().toLowerCase();
+		if (rawMode === "off") {
+			applyConfig({ enabled: false }, scope, pi, ctx);
+			showStatus(ctx, getActiveConfig());
+			return;
+		}
 		const mode = parseApprovalMode(parts.slice(1));
 		if (!mode) {
-			notify(ctx, "Invalid approval mode. Use 'all', 'destructive', or 'off'.");
+			notify(ctx, "Invalid approval mode. Use 'all' or 'destructive'.");
 			return;
 		}
 		applyConfig({ approvalMode: mode }, scope, pi, ctx);
@@ -430,10 +435,6 @@ async function chooseApprovalMode(
 			value: "destructive" as const,
 			label: currentMode === "destructive" ? "Destructive only (current)" : "Destructive only",
 		},
-		{
-			value: "off" as const,
-			label: currentMode === "off" ? "Off (YOLO) (current)" : "Off (YOLO)",
-		},
 	];
 
 	const selection = await ctx.ui.select("Approval mode", options.map((option) => option.label));
@@ -464,7 +465,6 @@ function parseApprovalMode(parts: string[]): ApprovalMode | undefined {
 	) {
 		return "destructive";
 	}
-	if (joined === "off") return "off";
 	return undefined;
 }
 
@@ -747,14 +747,9 @@ async function collectApprovals(
 ): Promise<Record<string, { allow: boolean; reason?: string }> | undefined> {
 	if (!ctx.hasUI) return undefined;
 
-	if (config.approvalMode === "off") {
-		logDebug("Approval mode off; skipping approvals.");
-		return undefined;
-	}
-
 	const approvalTargets = toolCalls.filter((toolCall) => {
 		if (config.approvalMode === "all") return true;
-			if (config.approvalMode === "destructive") {
+		if (config.approvalMode === "destructive") {
 			const metadata = preflight[toolCall.id];
 			return metadata?.destructive ?? false;
 		}
@@ -924,8 +919,6 @@ function capitalizeFirst(value: string): string {
 
 function formatApprovalMode(mode: ApprovalMode): string {
 	switch (mode) {
-		case "off":
-			return "off (YOLO)";
 		case "destructive":
 			return "destructive only";
 		case "all":
@@ -1003,9 +996,13 @@ function parseConfig(value: unknown): Partial<PreflightConfig> {
 	}
 
 	if (typeof record.approvalMode === "string") {
-		const parsed = parseApprovalMode([record.approvalMode]);
-		if (parsed) {
-			config.approvalMode = parsed;
+		if (record.approvalMode === "off") {
+			config.enabled = false;
+		} else {
+			const parsed = parseApprovalMode([record.approvalMode]);
+			if (parsed) {
+				config.approvalMode = parsed;
+			}
 		}
 	} else if (typeof record.approveDestructiveOnly === "boolean") {
 		config.approvalMode = record.approveDestructiveOnly ? "destructive" : "all";
