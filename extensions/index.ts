@@ -47,7 +47,7 @@ const ANSI_DESTRUCTIVE = "\u001b[1;38;5;203m";
 const ANSI_SCOPE_WARNING = "\u001b[38;5;222m";
 const ANSI_MUTED = "\u001b[38;5;244m";
 const DEFAULT_CONFIG: PreflightConfig = {
-	contextMessages: 12,
+	contextMessages: 1,
 	model: "current",
 	approvalMode: "all",
 	debug: false,
@@ -147,12 +147,13 @@ async function handlePreflightCommand(args: string, ctx: ExtensionContext, pi: E
 	}
 
 	if (action === "context") {
-		const value = Number(parts[1]);
-		if (!Number.isFinite(value) || value < 0) {
-			notify(ctx, "Invalid context value. Use a non-negative number.");
+		const rawValue = parts.slice(1).join(" ");
+		const parsed = parseContextValue(rawValue);
+		if (parsed === undefined) {
+			notify(ctx, "Invalid context value. Use 'full', '0' (tool-call only), or a positive number.");
 			return;
 		}
-		applyConfig({ contextMessages: Math.floor(value) }, scope, pi, ctx);
+		applyConfig({ contextMessages: parsed }, scope, pi, ctx);
 		showStatus(ctx, getActiveConfig());
 		return;
 	}
@@ -325,14 +326,29 @@ async function openScopedConfigMenu(
 				break;
 			}
 			case "context": {
-				const input = await ctx.ui.input(
-					"Context messages (0 = full context)",
-					String(scopedConfig.contextMessages),
-				);
+				const selection = await ctx.ui.select("Context messages", [
+					"Full context",
+					"Tool-call only",
+					"Last N messages",
+				]);
+				if (!selection) return;
+				if (selection.startsWith("Full")) {
+					applyConfig({ contextMessages: -1 }, scope, pi, ctx);
+					showStatus(ctx, getActiveConfig());
+					break;
+				}
+				if (selection.startsWith("Tool-call")) {
+					applyConfig({ contextMessages: 0 }, scope, pi, ctx);
+					showStatus(ctx, getActiveConfig());
+					break;
+				}
+
+				const fallbackValue = scopedConfig.contextMessages > 0 ? String(scopedConfig.contextMessages) : "1";
+				const input = await ctx.ui.input("Last N messages (1 or more)", fallbackValue);
 				if (!input) return;
 				const value = Number(input.trim());
-				if (!Number.isFinite(value) || value < 0) {
-					notify(ctx, "Invalid context value. Use a non-negative number.");
+				if (!Number.isFinite(value) || value < 1) {
+					notify(ctx, "Invalid value. Use a number greater than 0.");
 					continue;
 				}
 				applyConfig({ contextMessages: Math.floor(value) }, scope, pi, ctx);
@@ -525,7 +541,7 @@ async function buildPreflightMetadata(
 		return { status: "error", reason };
 	}
 
-	const contextLabel = config.contextMessages <= 0 ? "full" : `last ${config.contextMessages}`;
+	const contextLabel = formatContextLabel(config.contextMessages);
 	logDebug(`Preflight model: ${modelWithKey.model.provider}/${modelWithKey.model.id}.`);
 	logDebug(`Preflight context: ${contextLabel} messages.`);
 
@@ -592,7 +608,9 @@ async function resolveModelWithApiKey(
 }
 
 function limitContextMessages(messages: Message[], limit: number): Message[] {
-	if (!Number.isFinite(limit) || limit <= 0) return messages;
+	if (!Number.isFinite(limit)) return messages;
+	if (limit < 0) return messages;
+	if (limit === 0) return [];
 	if (messages.length <= limit) return messages;
 	return messages.slice(-limit);
 }
@@ -922,8 +940,31 @@ function formatApprovalMode(mode: ApprovalMode): string {
 }
 
 function formatContextMessages(limit: number): string {
-	if (limit <= 0) return "full";
+	if (limit < 0) return "full";
+	if (limit === 0) return "tool-call only";
 	return String(limit);
+}
+
+function formatContextLabel(limit: number): string {
+	if (limit < 0) return "full";
+	if (limit === 0) return "tool-call only";
+	return `last ${limit}`;
+}
+
+function parseContextValue(value: string): number | undefined {
+	const trimmed = value.trim().toLowerCase();
+	if (!trimmed) return undefined;
+	if (trimmed === "full") return -1;
+	if (trimmed === "tool-call" || trimmed === "tool call" || trimmed === "tool-call only") {
+		return 0;
+	}
+	if (trimmed === "none" || trimmed === "toolcall" || trimmed === "toolcall only") {
+		return 0;
+	}
+	const numberValue = Number(trimmed);
+	if (!Number.isFinite(numberValue)) return undefined;
+	if (numberValue < 0) return -1;
+	return Math.floor(numberValue);
 }
 
 function formatModelSetting(modelSetting: PreflightConfig["model"], currentModel?: Model<any>): string {
@@ -980,7 +1021,8 @@ function parseConfig(value: unknown): Partial<PreflightConfig> {
 	}
 
 	if (typeof record.contextMessages === "number" && Number.isFinite(record.contextMessages)) {
-		config.contextMessages = Math.max(0, Math.floor(record.contextMessages));
+		const normalized = Math.floor(record.contextMessages);
+		config.contextMessages = normalized < 0 ? -1 : normalized;
 	}
 
 	if (record.model === "current") {
