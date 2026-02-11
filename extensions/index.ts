@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { DynamicBorder, keyHint, rawKeyHint } from "@mariozechner/pi-coding-agent";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -9,6 +10,7 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { AssistantMessage, Context, Message, Model, TextContent } from "@mariozechner/pi-ai";
+import { Container, Spacer, Text, getEditorKeybindings, matchesKey, type KeyId, type TUI } from "@mariozechner/pi-tui";
 
 type ToolCallSummary = ToolCallsBatchEvent["toolCalls"][number];
 
@@ -22,6 +24,7 @@ type ApprovalMode = "all" | "destructive" | "off";
 
 interface PreflightConfig {
 	contextMessages: number;
+	explainKey: KeyId | KeyId[];
 	model: "current" | ModelRef;
 	approvalMode: ApprovalMode;
 	debug: boolean;
@@ -33,6 +36,10 @@ interface SessionConfigEntryData {
 
 type PreflightAttempt =
 	| { status: "ok"; metadata: Record<string, ToolPreflightMetadata> }
+	| { status: "error"; reason: string };
+
+type ExplanationAttempt =
+	| { status: "ok"; text: string }
 	| { status: "error"; reason: string };
 
 type PreflightFailureDecision =
@@ -48,6 +55,7 @@ const ANSI_SCOPE_WARNING = "\u001b[38;5;222m";
 const ANSI_MUTED = "\u001b[38;5;244m";
 const DEFAULT_CONFIG: PreflightConfig = {
 	contextMessages: 1,
+	explainKey: "ctrl+e",
 	model: "current",
 	approvalMode: "all",
 	debug: false,
@@ -98,7 +106,7 @@ export default function (pi: ExtensionAPI) {
 
 		const preflight = preflightResult.metadata;
 		const approvals = ctx.hasUI
-			? await collectApprovals(event.toolCalls, preflight, ctx, activeConfig, logDebug)
+			? await collectApprovals(event, preflight, ctx, activeConfig, logDebug)
 			: undefined;
 		if (approvals && Object.keys(approvals).length > 0) {
 			logDebug(`Preflight approvals collected for ${Object.keys(approvals).length} tool call(s).`);
@@ -472,6 +480,15 @@ function parseApprovalMode(parts: string[]): ApprovalMode | undefined {
 	return undefined;
 }
 
+function parseExplainKey(value: unknown): KeyId | KeyId[] | undefined {
+	if (typeof value === "string") return value;
+	if (Array.isArray(value)) {
+		const keys = value.filter((item): item is KeyId => typeof item === "string");
+		return keys.length > 0 ? keys : undefined;
+	}
+	return undefined;
+}
+
 function applyConfig(
 	update: Partial<PreflightConfig>,
 	scope: ConfigScope,
@@ -586,6 +603,61 @@ async function buildPreflightMetadata(
 	}
 }
 
+async function buildToolCallExplanation(
+	event: ToolCallsBatchEvent,
+	toolCall: ToolCallSummary,
+	metadata: ToolPreflightMetadata | undefined,
+	ctx: ExtensionContext,
+	config: PreflightConfig,
+	logDebug: DebugLogger,
+	signal?: AbortSignal,
+): Promise<ExplanationAttempt> {
+	const modelWithKey = await resolveModelWithApiKey(ctx, config);
+	if (!modelWithKey) {
+		const reason = "No model or API key available for explanation.";
+		logDebug(`Explanation failed: ${reason}`);
+		return { status: "error", reason };
+	}
+
+	const contextLabel = formatContextLabel(config.contextMessages);
+	logDebug(`Explanation model: ${modelWithKey.model.provider}/${modelWithKey.model.id}.`);
+	logDebug(`Explanation context: ${contextLabel} messages.`);
+
+	const instruction = buildExplainPrompt(toolCall, metadata);
+	const trimmedContext = limitContextMessages(event.llmContext.messages, config.contextMessages);
+	const explainContext: Context = {
+		...event.llmContext,
+		messages: [...trimmedContext, event.assistantMessage, createUserMessage(instruction)],
+	};
+
+	try {
+		const response = await streamSimple(modelWithKey.model, explainContext, {
+			apiKey: modelWithKey.apiKey,
+			signal,
+		});
+		for await (const _ of response) {
+			// Drain stream to completion.
+		}
+		const result = await response.result();
+		const text = normalizeExplanation(extractText(result.content));
+		if (!text) {
+			const reason = "Explanation response was empty.";
+			logDebug(`Explanation failed: ${reason}`);
+			return { status: "error", reason };
+		}
+		logDebug(`Explanation generated for ${toolCall.name}.`);
+		return { status: "ok", text };
+	} catch (error) {
+		if (signal?.aborted) {
+			return { status: "error", reason: "Explanation request cancelled." };
+		}
+		const message = error instanceof Error ? error.message : String(error);
+		const reason = message ? `Explanation request failed: ${message}` : "Explanation request failed.";
+		logDebug(`Explanation failed: ${reason}`);
+		return { status: "error", reason };
+	}
+}
+
 async function resolveModelWithApiKey(
 	ctx: ExtensionContext,
 	config: PreflightConfig,
@@ -628,6 +700,34 @@ function buildPreflightPrompt(toolCalls: ToolCallSummary[]): string {
 		"Tool calls:",
 		JSON.stringify(toolCalls, null, 2),
 	].join("\n");
+}
+
+function buildExplainPrompt(
+	toolCall: ToolCallSummary,
+	metadata: ToolPreflightMetadata | undefined,
+): string {
+	const summary = metadata?.summary ?? "Review requested action";
+	const destructive = metadata?.destructive ?? false;
+	const scopeLine = metadata?.scope?.length ? `Scope: ${metadata.scope.join(", ")}` : undefined;
+
+	const lines = [
+		"You are explaining a tool call before execution.",
+		"Provide 1-3 short sentences describing what will happen.",
+		"You may mention tool names and key arguments like file paths or commands.",
+		"Avoid markdown and do not include JSON.",
+		`Summary: ${summary}`,
+		`Destructive: ${destructive ? "yes" : "no"}.`,
+	];
+	if (scopeLine) lines.push(scopeLine);
+	lines.push("Tool call:", JSON.stringify(toolCall, null, 2));
+	return lines.join("\n");
+}
+
+function normalizeExplanation(text: string | undefined): string | undefined {
+	if (!text) return undefined;
+	const cleaned = stripCodeFence(text.trim());
+	const normalized = cleaned.trim();
+	return normalized ? normalized : undefined;
 }
 
 function createUserMessage(text: string): Message {
@@ -744,7 +844,7 @@ function extractJsonPayload(text: string): string | undefined {
 }
 
 async function collectApprovals(
-	toolCalls: ToolCallSummary[],
+	event: ToolCallsBatchEvent,
 	preflight: Record<string, ToolPreflightMetadata>,
 	ctx: ExtensionContext,
 	config: PreflightConfig,
@@ -757,7 +857,7 @@ async function collectApprovals(
 		return undefined;
 	}
 
-	const approvalTargets = toolCalls.filter((toolCall) => {
+	const approvalTargets = event.toolCalls.filter((toolCall) => {
 		if (config.approvalMode === "all") return true;
 		if (config.approvalMode === "destructive") {
 			const metadata = preflight[toolCall.id];
@@ -766,8 +866,10 @@ async function collectApprovals(
 		return false;
 	});
 
-	if (config.approvalMode === "destructive" && approvalTargets.length !== toolCalls.length) {
-		logDebug(`Auto-approved ${toolCalls.length - approvalTargets.length} non-destructive tool call(s).`);
+	if (config.approvalMode === "destructive" && approvalTargets.length !== event.toolCalls.length) {
+		logDebug(
+			`Auto-approved ${event.toolCalls.length - approvalTargets.length} non-destructive tool call(s).`,
+		);
 	}
 
 	if (approvalTargets.length === 0) {
@@ -781,22 +883,306 @@ async function collectApprovals(
 
 	for (const toolCall of approvalTargets) {
 		const metadata = preflight[toolCall.id];
-		const summary = metadata?.summary ?? "Review requested action";
-		const destructive = metadata?.destructive ?? true;
-		const scopeText = metadata?.scope?.length ? `Scope: ${metadata.scope.join(", ")}` : undefined;
-		const scopeWarn = scopeText ? isScopeOutsideWorkspace(metadata?.scope ?? [], ctx.cwd) : false;
-		const scopeLine = scopeText ? formatScopeLine(scopeText, scopeWarn) : undefined;
-		const detailLines = [scopeLine].filter(Boolean);
-		const details = detailLines.length > 0 ? `\n\n${detailLines.join("\n")}` : "";
-		const message = `${formatActionLine(summary, destructive)}${details}`;
-		const title = formatTitleLine("Agent wants to:");
-		const allow = await ctx.ui.confirm(title, message);
+		const allow = await requestApproval(event, toolCall, metadata, ctx, config, logDebug);
 		approvals[toolCall.id] = allow
 			? { allow: true }
 			: { allow: false, reason: "Blocked by user" };
 	}
 
 	return approvals;
+}
+
+type ApprovalDecision = "allow" | "deny";
+
+async function requestApproval(
+	event: ToolCallsBatchEvent,
+	toolCall: ToolCallSummary,
+	metadata: ToolPreflightMetadata | undefined,
+	ctx: ExtensionContext,
+	config: PreflightConfig,
+	logDebug: DebugLogger,
+): Promise<boolean> {
+	const summary = metadata?.summary ?? "Review requested action";
+	const destructive = metadata?.destructive ?? true;
+	const scopeDetails = buildScopeDetails(metadata, ctx.cwd);
+	const scopeLine = scopeDetails ? formatScopeLine(scopeDetails.text, scopeDetails.warn) : undefined;
+	const titleLine = formatTitleLine("Agent wants to:");
+	const fallbackMessage = buildApprovalMessage(summary, destructive, scopeLine);
+
+	try {
+		const decision = await ctx.ui.custom<ApprovalDecision | undefined>((tui, theme, _keybindings, done) => {
+			let explanation: string | undefined;
+			let status: "idle" | "loading" | "error" = "idle";
+			let statusMessage: string | undefined;
+			let explainController: AbortController | undefined;
+
+			const explainKeys = normalizeKeyIds(config.explainKey);
+			const hasExplain = explainKeys.length > 0;
+
+			const resolveMiddleLine = (): string | undefined => {
+				if (status === "loading") return formatExplainLine("Fetching explanation...");
+				if (status === "error" && statusMessage) return formatWarningLine(statusMessage);
+				if (explanation) return formatExplainLine(`Explanation: ${explanation}`);
+				return scopeLine;
+			};
+
+			const selector = new ApprovalSelectorComponent({
+				title: buildApprovalTitle(titleLine, summary, destructive, scopeLine),
+				options: ["Yes", "No"],
+				theme,
+				tui,
+				explainKeys,
+				onSelect: (option) => done(option === "Yes" ? "allow" : "deny"),
+				onCancel: () => done("deny"),
+				onExplain: hasExplain ? () => startExplain() : undefined,
+			});
+
+			const updateTitle = (): void => {
+				const middleLine = resolveMiddleLine();
+				selector.setTitle(buildApprovalTitle(titleLine, summary, destructive, middleLine));
+			};
+
+			const fetchExplanation = async (signal: AbortSignal): Promise<void> => {
+				const result = await buildToolCallExplanation(
+					event,
+					toolCall,
+					metadata,
+					ctx,
+					config,
+					logDebug,
+					signal,
+				);
+				if (signal.aborted) return;
+
+				if (result.status === "ok") {
+					explanation = result.text;
+					status = "idle";
+					statusMessage = undefined;
+				} else {
+					status = "error";
+					statusMessage = result.reason;
+				}
+
+				updateTitle();
+				tui.requestRender();
+			};
+
+			const startExplain = (): void => {
+				if (!hasExplain || status === "loading") return;
+				status = "loading";
+				statusMessage = undefined;
+				explanation = undefined;
+				updateTitle();
+				tui.requestRender();
+
+				explainController?.abort();
+				explainController = new AbortController();
+				void fetchExplanation(explainController.signal);
+			};
+
+			updateTitle();
+
+			return selector;
+		});
+
+		return decision === "allow";
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		logDebug(`Approval dialog failed: ${message}`);
+		const allow = await ctx.ui.confirm(titleLine, fallbackMessage);
+		return allow;
+	}
+}
+
+class ApprovalSelectorComponent extends Container {
+	private options: string[];
+	private selectedIndex = 0;
+	private listContainer: Container;
+	private titleText: Text;
+	private hintText: Text;
+	private theme: ExtensionContext["ui"]["theme"];
+	private tui: TUI;
+	private explainKeys: KeyId[];
+	private onSelect: (option: string) => void;
+	private onCancel: () => void;
+	private onExplain?: () => void;
+	private title: string;
+
+	constructor(options: {
+		title: string;
+		options: string[];
+		theme: ExtensionContext["ui"]["theme"];
+		tui: TUI;
+		explainKeys: KeyId[];
+		onSelect: (option: string) => void;
+		onCancel: () => void;
+		onExplain?: () => void;
+	}) {
+		super();
+		this.options = options.options;
+		this.theme = options.theme;
+		this.tui = options.tui;
+		this.explainKeys = options.explainKeys;
+		this.onSelect = options.onSelect;
+		this.onCancel = options.onCancel;
+		this.onExplain = options.onExplain;
+		this.title = options.title;
+
+		this.addChild(new DynamicBorder((s: string) => this.theme.fg("border", s)));
+		this.addChild(new Spacer(1));
+
+		this.titleText = new Text("", 1, 0);
+		this.addChild(this.titleText);
+		this.addChild(new Spacer(1));
+
+		this.listContainer = new Container();
+		this.addChild(this.listContainer);
+		this.addChild(new Spacer(1));
+
+		this.hintText = new Text("", 1, 0);
+		this.addChild(this.hintText);
+		this.addChild(new Spacer(1));
+		this.addChild(new DynamicBorder((s: string) => this.theme.fg("border", s)));
+
+		this.updateTitle();
+		this.updateList();
+		this.updateHints();
+	}
+
+	setTitle(title: string): void {
+		this.title = title;
+		this.updateTitle();
+	}
+
+	override invalidate(): void {
+		super.invalidate();
+		this.updateTitle();
+		this.updateList();
+		this.updateHints();
+	}
+
+	handleInput(keyData: string): void {
+		const kb = getEditorKeybindings();
+		if (kb.matches(keyData, "selectUp") || keyData === "k") {
+			this.selectedIndex = Math.max(0, this.selectedIndex - 1);
+			this.updateList();
+			this.tui.requestRender();
+			return;
+		}
+		if (kb.matches(keyData, "selectDown") || keyData === "j") {
+			this.selectedIndex = Math.min(this.options.length - 1, this.selectedIndex + 1);
+			this.updateList();
+			this.tui.requestRender();
+			return;
+		}
+		if (kb.matches(keyData, "selectConfirm") || keyData === "\n") {
+			const selected = this.options[this.selectedIndex];
+			if (selected) this.onSelect(selected);
+			return;
+		}
+		if (kb.matches(keyData, "selectCancel")) {
+			this.onCancel();
+			return;
+		}
+		if (this.explainKeys.length > 0 && matchesKeyList(keyData, this.explainKeys)) {
+			this.onExplain?.();
+		}
+	}
+
+	private updateTitle(): void {
+		this.titleText.setText(this.theme.fg("accent", this.title));
+	}
+
+	private updateList(): void {
+		this.listContainer.clear();
+		for (let i = 0; i < this.options.length; i++) {
+			const option = this.options[i] ?? "";
+			const isSelected = i === this.selectedIndex;
+			const text = isSelected
+				? this.theme.fg("accent", "→ ") + this.theme.fg("accent", option)
+				: `  ${this.theme.fg("text", option)}`;
+			this.listContainer.addChild(new Text(text, 1, 0));
+		}
+	}
+
+	private updateHints(): void {
+		const explainHint =
+			this.explainKeys.length > 0
+				? `  ${rawKeyHint(formatKeyList(this.explainKeys), "explain")}`
+				: "";
+		const hintLine =
+			rawKeyHint("↑↓", "navigate") +
+			"  " +
+			keyHint("selectConfirm", "select") +
+			"  " +
+			keyHint("selectCancel", "cancel") +
+			explainHint;
+		this.hintText.setText(hintLine);
+	}
+}
+
+function buildApprovalTitle(
+	titleLine: string,
+	summary: string,
+	destructive: boolean,
+	middleLine?: string,
+): string {
+	return `${titleLine}\n${buildApprovalMessage(summary, destructive, middleLine)}`;
+}
+
+function buildApprovalMessage(summary: string, destructive: boolean, middleLine?: string): string {
+	const lines = [formatActionLine(summary, destructive)];
+	if (middleLine) {
+		lines.push("", middleLine);
+	}
+	return lines.join("\n");
+}
+
+function buildScopeDetails(
+	metadata: ToolPreflightMetadata | undefined,
+	cwd: string,
+): { text: string; warn: boolean } | undefined {
+	if (!metadata?.scope?.length) return undefined;
+	const text = `Scope: ${metadata.scope.join(", ")}`;
+	const warn = isScopeOutsideWorkspace(metadata.scope, cwd);
+	return { text, warn };
+}
+
+function normalizeKeyIds(keys: KeyId | KeyId[]): KeyId[] {
+	return Array.isArray(keys) ? keys : [keys];
+}
+
+function matchesKeyList(data: string, keys: KeyId[]): boolean {
+	for (const key of keys) {
+		if (matchesKey(data, key)) return true;
+	}
+	return false;
+}
+
+function formatKeyList(keys: KeyId[]): string {
+	return keys.join("/");
+}
+
+function formatTitleLine(text: string): string {
+	return `${ANSI_MUTED}${text}${ANSI_RESET}`;
+}
+
+function formatActionLine(text: string, destructive: boolean): string {
+	const color = destructive ? ANSI_DESTRUCTIVE : ANSI_ACTION;
+	return `${color}${text}${ANSI_RESET}`;
+}
+
+function formatScopeLine(text: string, warn: boolean): string {
+	const color = warn ? ANSI_SCOPE_WARNING : ANSI_MUTED;
+	return `${color}${text}${ANSI_RESET}`;
+}
+
+function formatExplainLine(text: string): string {
+	return `${ANSI_MUTED}${text}${ANSI_RESET}`;
+}
+
+function formatWarningLine(text: string): string {
+	return `${ANSI_SCOPE_WARNING}${text}${ANSI_RESET}`;
 }
 
 function buildAllowAllApprovals(
@@ -877,20 +1263,6 @@ function sanitizeSummary(summary: string | undefined, toolCall: ToolCallSummary)
 	}
 
 	return cleaned ? capitalizeFirst(cleaned) : undefined;
-}
-
-function formatTitleLine(text: string): string {
-	return `${ANSI_MUTED}${text}${ANSI_RESET}`;
-}
-
-function formatActionLine(text: string, destructive: boolean): string {
-	const color = destructive ? ANSI_DESTRUCTIVE : ANSI_ACTION;
-	return `${color}${text}${ANSI_RESET}`;
-}
-
-function formatScopeLine(text: string, warn: boolean): string {
-	const color = warn ? ANSI_SCOPE_WARNING : ANSI_MUTED;
-	return `${color}${text}${ANSI_RESET}`;
 }
 
 function isScopeOutsideWorkspace(scopes: string[], cwd: string): boolean {
@@ -1023,6 +1395,11 @@ function parseConfig(value: unknown): Partial<PreflightConfig> {
 	if (typeof record.contextMessages === "number" && Number.isFinite(record.contextMessages)) {
 		const normalized = Math.floor(record.contextMessages);
 		config.contextMessages = normalized < 0 ? -1 : normalized;
+	}
+
+	const explainKey = parseExplainKey(record.explainKey);
+	if (explainKey) {
+		config.explainKey = explainKey;
 	}
 
 	if (record.model === "current") {
