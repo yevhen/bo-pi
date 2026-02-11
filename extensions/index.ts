@@ -29,7 +29,6 @@ interface SessionConfigEntryData {
 	config?: unknown;
 }
 
-const MAX_ARGS_CHARS = 1200;
 const SESSION_ENTRY_TYPE = "bo-pi-config";
 const DEFAULT_CONFIG: PreflightConfig = {
 	enabled: true,
@@ -441,8 +440,8 @@ function buildFallbackMetadata(toolCalls: ToolCallSummary[]): Record<string, Too
 
 	for (const toolCall of toolCalls) {
 		entries[toolCall.id] = {
-			summary: `Run ${toolCall.name}`,
-			destructive: isLikelyDestructive(toolCall.name),
+			summary: "Review requested action",
+			destructive: false,
 			confidence: "low",
 		};
 	}
@@ -455,8 +454,9 @@ function buildPreflightPrompt(toolCalls: ToolCallSummary[]): string {
 		"You are a tool preflight assistant.",
 		"For each tool call, return JSON mapping toolCallId to:",
 		"{ summary: string, destructive: boolean, confidence?: low|medium|high, scope?: string[] }.",
-		"Use concise summaries suitable for a confirmation dialog.",
-		"destructive = true if the call writes data, edits files, runs commands, or mutates external state.",
+		"Summaries should be short, human-friendly action phrases.",
+		"Do not mention tool names or raw arguments in the summary.",
+		"destructive = true only if the call changes data or system state.",
 		"Respond with JSON only (no markdown, no extra text).",
 		"Tool calls:",
 		JSON.stringify(toolCalls, null, 2),
@@ -531,21 +531,24 @@ function normalizePreflight(
 	toolCalls: ToolCallSummary[],
 	fallback: Record<string, ToolPreflightMetadata>,
 ): Record<string, ToolPreflightMetadata> {
-	if (!parsed) return fallback;
-
 	const result: Record<string, ToolPreflightMetadata> = {};
 	for (const toolCall of toolCalls) {
-		const entry = parsed[toolCall.id];
-		if (entry && typeof entry.summary === "string" && typeof entry.destructive === "boolean") {
-			result[toolCall.id] = {
-				summary: entry.summary,
-				destructive: entry.destructive,
-				confidence: entry.confidence,
-				scope: Array.isArray(entry.scope) ? entry.scope.filter((item) => typeof item === "string") : undefined,
-			};
-		} else {
-			result[toolCall.id] = fallback[toolCall.id];
-		}
+		const entry = parsed?.[toolCall.id];
+		const summary =
+			sanitizeSummary(entry?.summary, toolCall) ??
+			fallback[toolCall.id]?.summary ??
+			"Review requested action";
+		const destructive =
+			entry && typeof entry.destructive === "boolean"
+				? entry.destructive
+				: fallback[toolCall.id]?.destructive ?? false;
+
+		result[toolCall.id] = {
+			summary,
+			destructive,
+			confidence: entry?.confidence ?? fallback[toolCall.id]?.confidence,
+			scope: Array.isArray(entry?.scope) ? entry?.scope?.filter((item) => typeof item === "string") : undefined,
+		};
 	}
 
 	return result;
@@ -593,13 +596,14 @@ async function collectApprovals(
 
 	for (const toolCall of toolCalls) {
 		const metadata = preflight[toolCall.id];
-		const summary = metadata?.summary ?? `Run ${toolCall.name}`;
-		const destructive = metadata?.destructive ?? isLikelyDestructive(toolCall.name);
-		const argsPreview = formatArgsPreview(toolCall.args);
-		const scope = metadata?.scope?.length ? `\nScope: ${metadata.scope.join(", ")}` : "";
-		const warning = destructive ? "Destructive: yes" : "Destructive: no";
-		const message = `${summary}\n\n${warning}${scope}\n\nArgs:\n${argsPreview}`;
-		const title = destructive ? `Approve destructive ${toolCall.name}?` : `Approve ${toolCall.name}?`;
+		const summary = metadata?.summary ?? "Review requested action";
+		const destructive = metadata?.destructive ?? false;
+		const scopeLine = metadata?.scope?.length ? `Scope: ${metadata.scope.join(", ")}` : undefined;
+		const warningLine = destructive ? formatWarningLine("DESTRUCTIVE ACTION") : undefined;
+		const detailLines = [warningLine, scopeLine].filter(Boolean);
+		const details = detailLines.length > 0 ? `\n\n${detailLines.join("\n")}` : "";
+		const message = `${summary}${details}`;
+		const title = "Allow agent to:";
 		const allow = await ctx.ui.confirm(title, message);
 		approvals[toolCall.id] = allow
 			? { allow: true }
@@ -609,29 +613,36 @@ async function collectApprovals(
 	return approvals;
 }
 
-function formatArgsPreview(args: Record<string, unknown>): string {
-	const formatted = safeJsonStringify(args, 2);
-	if (formatted.length <= MAX_ARGS_CHARS) return formatted;
-	return `${formatted.slice(0, MAX_ARGS_CHARS)}\n...`;
+function sanitizeSummary(summary: string | undefined, toolCall: ToolCallSummary): string | undefined {
+	if (!summary) return undefined;
+	let cleaned = summary.trim();
+	if (!cleaned) return undefined;
+
+	const patterns = [
+		new RegExp(`^(run|use|execute)\\s+${escapeRegExp(toolCall.name)}\\b\\s+to\\s+`, "i"),
+	];
+
+	for (const pattern of patterns) {
+		const updated = cleaned.replace(pattern, "").trim();
+		if (updated && updated !== cleaned) {
+			cleaned = updated;
+			break;
+		}
+	}
+
+	return cleaned ? capitalizeFirst(cleaned) : undefined;
 }
 
-function safeJsonStringify(value: unknown, indent = 0): string {
-	try {
-		return JSON.stringify(value, null, indent);
-	} catch (error) {
-		return String(value);
-	}
+function formatWarningLine(text: string): string {
+	return `\u001b[1;33m${text}\u001b[0m`;
 }
 
-function isLikelyDestructive(toolName: string): boolean {
-	switch (toolName) {
-		case "write":
-		case "edit":
-		case "bash":
-			return true;
-		default:
-			return false;
-	}
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function capitalizeFirst(value: string): string {
+	return value.length > 0 ? value[0].toUpperCase() + value.slice(1) : value;
 }
 
 function formatContextMessages(limit: number): string {
