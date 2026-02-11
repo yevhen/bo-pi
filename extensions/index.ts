@@ -1,43 +1,18 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	ToolCallsBatchEvent,
+	ToolPreflightMetadata,
+} from "@mariozechner/pi-coding-agent";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { AssistantMessage, Context, Message, Model, TextContent } from "@mariozechner/pi-ai";
 
-interface ToolPreflightMetadata {
-	summary: string;
-	destructive: boolean;
-	confidence?: "low" | "medium" | "high";
-	scope?: string[];
-}
+type ToolCallSummary = ToolCallsBatchEvent["toolCalls"][number];
 
-interface ToolCallSummary {
-	id: string;
-	name: string;
-	args: Record<string, unknown>;
-}
-
-interface ToolCallsBatchEvent {
-	type: "tool_calls_batch";
-	toolCalls: ToolCallSummary[];
-	assistantMessage: AssistantMessage;
-	llmContext: Context;
-}
-
-interface ToolCallsBatchResult {
-	preflight?: Record<string, ToolPreflightMetadata>;
-	approvals?: Record<string, { allow: boolean; reason?: string }>;
-}
-
-type ToolCallsBatchHandler = (event: ToolCallsBatchEvent, ctx: ExtensionContext) =>
-	| ToolCallsBatchResult
-	| undefined
-	| Promise<ToolCallsBatchResult | undefined>;
-
-type PreflightExtensionAPI = ExtensionAPI & {
-	on(event: "tool_calls_batch", handler: ToolCallsBatchHandler): void;
-};
+type DebugLogger = (message: string) => void;
 
 type ConfigScope = "session" | "persistent";
 
@@ -47,6 +22,7 @@ interface PreflightConfig {
 	enabled: boolean;
 	contextMessages: number;
 	model: "current" | ModelRef;
+	debug: boolean;
 }
 
 interface SessionConfigEntryData {
@@ -59,19 +35,18 @@ const DEFAULT_CONFIG: PreflightConfig = {
 	enabled: true,
 	contextMessages: 12,
 	model: "current",
+	debug: false,
 };
 
 let persistentConfig = loadPersistentConfig();
 let sessionOverride: Partial<PreflightConfig> = {};
 
 export default function (pi: ExtensionAPI) {
-	const preflightApi = pi as PreflightExtensionAPI;
-
-	preflightApi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", (_event, ctx) => {
 		refreshConfigs(ctx);
 	});
 
-	preflightApi.on("session_switch", (_event, ctx) => {
+	pi.on("session_switch", (_event, ctx) => {
 		refreshConfigs(ctx);
 	});
 
@@ -82,14 +57,20 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	preflightApi.on("tool_calls_batch", async (event, ctx) => {
+	pi.on("tool_calls_batch", async (event, ctx) => {
 		const activeConfig = getActiveConfig();
 		if (!activeConfig.enabled) {
 			return undefined;
 		}
 
-		const preflight = await buildPreflightMetadata(event, ctx, activeConfig);
-		const approvals = ctx.hasUI ? await collectApprovals(event.toolCalls, preflight, ctx) : undefined;
+		const logDebug = createDebugLogger(ctx, activeConfig);
+		logDebug(`Preflight batch: ${event.toolCalls.length} tool call${event.toolCalls.length === 1 ? "" : "s"}.`);
+
+		const preflight = await buildPreflightMetadata(event, ctx, activeConfig, logDebug);
+		const approvals = ctx.hasUI ? await collectApprovals(event.toolCalls, preflight, ctx, logDebug) : undefined;
+		if (approvals && Object.keys(approvals).length > 0) {
+			logDebug(`Preflight approvals collected for ${Object.keys(approvals).length} tool call(s).`);
+		}
 		return { preflight, approvals };
 	});
 }
@@ -148,6 +129,17 @@ async function handlePreflightCommand(args: string, ctx: ExtensionContext, pi: E
 		return;
 	}
 
+	if (action === "debug") {
+		const setting = parts[1]?.toLowerCase();
+		if (setting !== "on" && setting !== "off") {
+			notify(ctx, "Invalid debug setting. Use 'on' or 'off'.");
+			return;
+		}
+		applyConfig({ debug: setting === "on" }, scope, pi, ctx);
+		showStatus(ctx, getActiveConfig());
+		return;
+	}
+
 	if (action === "reset-session") {
 		clearSessionOverrides(pi);
 		showStatus(ctx, getActiveConfig());
@@ -171,6 +163,10 @@ async function openConfigMenu(ctx: ExtensionContext, pi: ExtensionAPI): Promise<
 		{
 			key: "model",
 			label: `Model: ${formatModelSetting(activeConfig.model, ctx.model)}`,
+		},
+		{
+			key: "debug",
+			label: `Debug: ${activeConfig.debug ? "on" : "off"}`,
 		},
 		{
 			key: "clear-session",
@@ -221,6 +217,13 @@ async function openConfigMenu(ctx: ExtensionContext, pi: ExtensionAPI): Promise<
 			const scope = await promptScope(ctx);
 			if (!scope) return;
 			applyConfig({ model: selectionModel }, scope, pi, ctx);
+			showStatus(ctx, getActiveConfig());
+			break;
+		}
+		case "debug": {
+			const scope = await promptScope(ctx);
+			if (!scope) return;
+			applyConfig({ debug: !activeConfig.debug }, scope, pi, ctx);
 			showStatus(ctx, getActiveConfig());
 			break;
 		}
@@ -336,6 +339,7 @@ function showStatus(ctx: ExtensionContext, config: PreflightConfig): void {
 		`Enabled: ${config.enabled ? "on" : "off"}`,
 		`Context messages: ${formatContextMessages(config.contextMessages)}`,
 		`Model: ${formatModelSetting(config.model, ctx.model)}`,
+		`Debug: ${config.debug ? "on" : "off"}`,
 		`Scope: ${sessionOverrideExists() ? "session override" : "persistent"}`,
 	];
 
@@ -348,16 +352,35 @@ function notify(ctx: ExtensionContext, message: string): void {
 	}
 }
 
+function createDebugLogger(ctx: ExtensionContext, config: PreflightConfig): DebugLogger {
+	if (!config.debug) {
+		return () => {};
+	}
+	return (message) => {
+		if (ctx.hasUI) {
+			ctx.ui.notify(message, "info");
+		} else {
+			console.log(`[bo-pi] ${message}`);
+		}
+	};
+}
+
 async function buildPreflightMetadata(
 	event: ToolCallsBatchEvent,
 	ctx: ExtensionContext,
 	config: PreflightConfig,
+	logDebug: DebugLogger,
 ): Promise<Record<string, ToolPreflightMetadata>> {
 	const fallback = buildFallbackMetadata(event.toolCalls);
 	const modelWithKey = await resolveModelWithApiKey(ctx, config);
 	if (!modelWithKey) {
+		logDebug("Preflight fallback: no model or API key available.");
 		return fallback;
 	}
+
+	const contextLabel = config.contextMessages <= 0 ? "full" : `last ${config.contextMessages}`;
+	logDebug(`Preflight model: ${modelWithKey.model.provider}/${modelWithKey.model.id}.`);
+	logDebug(`Preflight context: ${contextLabel} messages.`);
 
 	const instruction = buildPreflightPrompt(event.toolCalls);
 	const trimmedContext = limitContextMessages(event.llmContext.messages, config.contextMessages);
@@ -374,8 +397,14 @@ async function buildPreflightMetadata(
 		const result = await response.result();
 		const text = extractText(result.content);
 		const parsed = parsePreflightResponse(text);
+		if (!parsed) {
+			logDebug("Preflight parse failed; using fallback metadata.");
+			return fallback;
+		}
+		logDebug(`Preflight parsed ${Object.keys(parsed).length} tool call(s).`);
 		return normalizePreflight(parsed, event.toolCalls, fallback);
 	} catch (error) {
+		logDebug("Preflight request failed; using fallback metadata.");
 		return fallback;
 	}
 }
@@ -554,8 +583,11 @@ async function collectApprovals(
 	toolCalls: ToolCallSummary[],
 	preflight: Record<string, ToolPreflightMetadata>,
 	ctx: ExtensionContext,
+	logDebug: DebugLogger,
 ): Promise<Record<string, { allow: boolean; reason?: string }> | undefined> {
 	if (!ctx.hasUI) return undefined;
+
+	logDebug(`Requesting approvals for ${toolCalls.length} tool call(s).`);
 
 	const approvals: Record<string, { allow: boolean; reason?: string }> = {};
 
@@ -668,6 +700,10 @@ function parseConfig(value: unknown): Partial<PreflightConfig> {
 		config.model = "current";
 	} else if (isModelRef(record.model)) {
 		config.model = record.model;
+	}
+
+	if (typeof record.debug === "boolean") {
+		config.debug = record.debug;
 	}
 
 	return config;
