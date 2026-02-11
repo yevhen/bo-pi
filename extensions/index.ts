@@ -32,6 +32,15 @@ interface SessionConfigEntryData {
 	config?: unknown;
 }
 
+type PreflightAttempt =
+	| { status: "ok"; metadata: Record<string, ToolPreflightMetadata> }
+	| { status: "error"; reason: string };
+
+type PreflightFailureDecision =
+	| { action: "retry" }
+	| { action: "allow" }
+	| { action: "block"; reason: string };
+
 const SESSION_ENTRY_TYPE = "bo-pi-config";
 const ANSI_RESET = "\u001b[0m";
 const ANSI_ACTION = "\u001b[38;5;110m";
@@ -74,15 +83,26 @@ export default function (pi: ExtensionAPI) {
 		const logDebug = createDebugLogger(ctx, activeConfig);
 		logDebug(`Preflight batch: ${event.toolCalls.length} tool call${event.toolCalls.length === 1 ? "" : "s"}.`);
 
-		if (activeConfig.approvalMode === "off") {
-			logDebug("Approval mode off; skipping preflight.");
-			return undefined;
+		let preflightResult = await buildPreflightMetadata(event, ctx, activeConfig, logDebug);
+		while (preflightResult.status === "error") {
+			const decision = await handlePreflightFailure(event.toolCalls, preflightResult.reason, ctx, logDebug);
+			if (decision.action === "retry") {
+				preflightResult = await buildPreflightMetadata(event, ctx, activeConfig, logDebug);
+				continue;
+			}
+			if (decision.action === "allow") {
+				const approvals = buildAllowAllApprovals(event.toolCalls);
+				return { approvals };
+			}
+			const approvals = buildBlockAllApprovals(event.toolCalls, decision.reason);
+			return { approvals };
 		}
 
-		const preflight = await buildPreflightMetadata(event, ctx, activeConfig, logDebug);
-		const approvals = ctx.hasUI
-			? await collectApprovals(event.toolCalls, preflight, ctx, activeConfig, logDebug)
-			: undefined;
+		const preflight = preflightResult.metadata;
+		const approvals =
+			activeConfig.approvalMode === "off" || !ctx.hasUI
+				? undefined
+				: await collectApprovals(event.toolCalls, preflight, ctx, activeConfig, logDebug);
 		if (approvals && Object.keys(approvals).length > 0) {
 			logDebug(`Preflight approvals collected for ${Object.keys(approvals).length} tool call(s).`);
 		}
@@ -96,6 +116,13 @@ function refreshConfigs(ctx: ExtensionContext): void {
 }
 
 function getActiveConfig(): PreflightConfig {
+	return { ...persistentConfig, ...sessionOverride };
+}
+
+function getConfigForScope(scope: ConfigScope): PreflightConfig {
+	if (scope === "persistent") {
+		return { ...persistentConfig };
+	}
 	return { ...persistentConfig, ...sessionOverride };
 }
 
@@ -187,113 +214,160 @@ async function handlePreflightCommand(args: string, ctx: ExtensionContext, pi: E
 }
 
 async function openConfigMenu(ctx: ExtensionContext, pi: ExtensionAPI): Promise<void> {
-	const activeConfig = getActiveConfig();
-	const options = [
-		{
-			key: "toggle",
-			label: `Enabled: ${activeConfig.enabled ? "on" : "off"}`,
-		},
-		{
-			key: "context",
-			label: `Context messages: ${formatContextMessages(activeConfig.contextMessages)}`,
-		},
-		{
-			key: "model",
-			label: `Model: ${formatModelSetting(activeConfig.model, ctx.model)}`,
-		},
-		{
-			key: "approval-mode",
-			label: `Approvals: ${formatApprovalMode(activeConfig.approvalMode)}`,
-		},
-		{
-			key: "debug",
-			label: `Debug: ${activeConfig.debug ? "on" : "off"}`,
-		},
-		{
-			key: "clear-session",
-			label: sessionOverrideExists()
-				? "Clear session overrides"
-				: "Clear session overrides (none)",
-		},
-		{
-			key: "status",
-			label: "Show status",
-		},
-	];
+	if (!ctx.hasUI) return;
 
-	const selection = await ctx.ui.select("Preflight settings", options.map((option) => option.label));
-	if (!selection) return;
+	while (true) {
+		const options = [
+			{
+				key: "session",
+				label: sessionOverrideExists()
+					? "Session settings (overrides active)"
+					: "Session settings",
+			},
+			{
+				key: "persistent",
+				label: "Default settings",
+			},
+			{
+				key: "clear-session",
+				label: sessionOverrideExists()
+					? "Clear session overrides"
+					: "Clear session overrides (none)",
+			},
+			{
+				key: "status",
+				label: "Show status",
+			},
+			{
+				key: "exit",
+				label: "Exit",
+			},
+		];
 
-	const selected = options.find((option) => option.label === selection);
-	if (!selected) return;
+		const selection = await ctx.ui.select("Preflight settings", options.map((option) => option.label));
+		if (!selection) return;
 
-	switch (selected.key) {
-		case "toggle": {
-			const scope = await promptScope(ctx);
-			if (!scope) return;
-			applyConfig({ enabled: !activeConfig.enabled }, scope, pi, ctx);
-			showStatus(ctx, getActiveConfig());
-			break;
-		}
-		case "context": {
-			const input = await ctx.ui.input(
-				"Context messages (0 = full context)",
-				String(activeConfig.contextMessages),
-			);
-			if (!input) return;
-			const value = Number(input.trim());
-			if (!Number.isFinite(value) || value < 0) {
-				notify(ctx, "Invalid context value. Use a non-negative number.");
-				return;
+		const selected = options.find((option) => option.label === selection);
+		if (!selected) return;
+
+		switch (selected.key) {
+			case "session":
+				await openScopedConfigMenu(ctx, pi, "session");
+				break;
+			case "persistent":
+				await openScopedConfigMenu(ctx, pi, "persistent");
+				break;
+			case "clear-session": {
+				if (!sessionOverrideExists()) {
+					notify(ctx, "No session overrides to clear.");
+					break;
+				}
+				const confirm = await ctx.ui.confirm("Clear session overrides", "Reset session-only settings?");
+				if (!confirm) break;
+				clearSessionOverrides(pi);
+				showStatus(ctx, getActiveConfig());
+				break;
 			}
-			const scope = await promptScope(ctx);
-			if (!scope) return;
-			applyConfig({ contextMessages: Math.floor(value) }, scope, pi, ctx);
-			showStatus(ctx, getActiveConfig());
-			break;
-		}
-		case "model": {
-			const selectionModel = await chooseModel(ctx, activeConfig.model);
-			if (!selectionModel) return;
-			const scope = await promptScope(ctx);
-			if (!scope) return;
-			applyConfig({ model: selectionModel }, scope, pi, ctx);
-			showStatus(ctx, getActiveConfig());
-			break;
-		}
-		case "approval-mode": {
-			const mode = await chooseApprovalMode(ctx, activeConfig.approvalMode);
-			if (!mode) return;
-			const scope = await promptScope(ctx);
-			if (!scope) return;
-			applyConfig({ approvalMode: mode }, scope, pi, ctx);
-			showStatus(ctx, getActiveConfig());
-			break;
-		}
-		case "debug": {
-			const scope = await promptScope(ctx);
-			if (!scope) return;
-			applyConfig({ debug: !activeConfig.debug }, scope, pi, ctx);
-			showStatus(ctx, getActiveConfig());
-			break;
-		}
-		case "clear-session": {
-			if (!sessionOverrideExists()) {
-				notify(ctx, "No session overrides to clear.");
+			case "status":
+				showStatus(ctx, getActiveConfig());
+				break;
+			case "exit":
 				return;
+			default:
+				return;
+		}
+	}
+}
+
+async function openScopedConfigMenu(
+	ctx: ExtensionContext,
+	pi: ExtensionAPI,
+	scope: ConfigScope,
+): Promise<void> {
+	if (!ctx.hasUI) return;
+
+	const title = scope === "session" ? "Session settings" : "Default settings";
+
+	while (true) {
+		const scopedConfig = getConfigForScope(scope);
+		const options = [
+			{
+				key: "toggle",
+				label: `Enabled: ${scopedConfig.enabled ? "on" : "off"}`,
+			},
+			{
+				key: "context",
+				label: `Context messages: ${formatContextMessages(scopedConfig.contextMessages)}`,
+			},
+			{
+				key: "model",
+				label: `Model: ${formatModelSetting(scopedConfig.model, ctx.model)}`,
+			},
+			{
+				key: "approval-mode",
+				label: `Approvals: ${formatApprovalMode(scopedConfig.approvalMode)}`,
+			},
+			{
+				key: "debug",
+				label: `Debug: ${scopedConfig.debug ? "on" : "off"}`,
+			},
+			{
+				key: "back",
+				label: "Back",
+			},
+		];
+
+		const selection = await ctx.ui.select(title, options.map((option) => option.label));
+		if (!selection) return;
+
+		const selected = options.find((option) => option.label === selection);
+		if (!selected) return;
+
+		switch (selected.key) {
+			case "toggle": {
+				applyConfig({ enabled: !scopedConfig.enabled }, scope, pi, ctx);
+				showStatus(ctx, getActiveConfig());
+				break;
 			}
-			const confirm = await ctx.ui.confirm("Clear session overrides", "Reset session-only settings?");
-			if (!confirm) return;
-			clearSessionOverrides(pi);
-			showStatus(ctx, getActiveConfig());
-			break;
+			case "context": {
+				const input = await ctx.ui.input(
+					"Context messages (0 = full context)",
+					String(scopedConfig.contextMessages),
+				);
+				if (!input) return;
+				const value = Number(input.trim());
+				if (!Number.isFinite(value) || value < 0) {
+					notify(ctx, "Invalid context value. Use a non-negative number.");
+					continue;
+				}
+				applyConfig({ contextMessages: Math.floor(value) }, scope, pi, ctx);
+				showStatus(ctx, getActiveConfig());
+				break;
+			}
+			case "model": {
+				const selectionModel = await chooseModel(ctx, scopedConfig.model);
+				if (!selectionModel) return;
+				applyConfig({ model: selectionModel }, scope, pi, ctx);
+				showStatus(ctx, getActiveConfig());
+				break;
+			}
+			case "approval-mode": {
+				const mode = await chooseApprovalMode(ctx, scopedConfig.approvalMode);
+				if (!mode) return;
+				applyConfig({ approvalMode: mode }, scope, pi, ctx);
+				showStatus(ctx, getActiveConfig());
+				break;
+			}
+			case "debug": {
+				applyConfig({ debug: !scopedConfig.debug }, scope, pi, ctx);
+				showStatus(ctx, getActiveConfig());
+				break;
+			}
+			case "back":
+				return;
+			default:
+				return;
 		}
-		case "status": {
-			showStatus(ctx, activeConfig);
-			break;
-		}
-		default:
-			break;
 	}
 }
 
@@ -303,13 +377,6 @@ function parseScope(args: string[]): ConfigScope {
 		return "persistent";
 	}
 	return "session";
-}
-
-async function promptScope(ctx: ExtensionContext): Promise<ConfigScope | undefined> {
-	if (!ctx.hasUI) return "session";
-	const selection = await ctx.ui.select("Apply setting", ["Session only", "Persistent (all sessions)"]);
-	if (!selection) return undefined;
-	return selection.startsWith("Persistent") ? "persistent" : "session";
 }
 
 async function chooseModel(
@@ -463,12 +530,12 @@ async function buildPreflightMetadata(
 	ctx: ExtensionContext,
 	config: PreflightConfig,
 	logDebug: DebugLogger,
-): Promise<Record<string, ToolPreflightMetadata>> {
-	const fallback = buildFallbackMetadata(event.toolCalls);
+): Promise<PreflightAttempt> {
 	const modelWithKey = await resolveModelWithApiKey(ctx, config);
 	if (!modelWithKey) {
-		logDebug("Preflight fallback: no model or API key available.");
-		return fallback;
+		const reason = "No model or API key available for preflight.";
+		logDebug(`Preflight failed: ${reason}`);
+		return { status: "error", reason };
 	}
 
 	const contextLabel = config.contextMessages <= 0 ? "full" : `last ${config.contextMessages}`;
@@ -489,16 +556,30 @@ async function buildPreflightMetadata(
 		}
 		const result = await response.result();
 		const text = extractText(result.content);
+		if (!text) {
+			const reason = "Preflight response was empty.";
+			logDebug(`Preflight failed: ${reason}`);
+			return { status: "error", reason };
+		}
 		const parsed = parsePreflightResponse(text);
 		if (!parsed) {
-			logDebug("Preflight parse failed; using fallback metadata.");
-			return fallback;
+			const reason = "Preflight response was not valid JSON.";
+			logDebug(`Preflight failed: ${reason}`);
+			return { status: "error", reason };
 		}
-		logDebug(`Preflight parsed ${Object.keys(parsed).length} tool call(s).`);
-		return normalizePreflight(parsed, event.toolCalls, fallback);
+		const normalized = normalizePreflight(parsed, event.toolCalls);
+		if (!normalized) {
+			const reason = "Preflight response did not include all tool calls.";
+			logDebug(`Preflight failed: ${reason}`);
+			return { status: "error", reason };
+		}
+		logDebug(`Preflight parsed ${Object.keys(normalized).length} tool call(s).`);
+		return { status: "ok", metadata: normalized };
 	} catch (error) {
-		logDebug("Preflight request failed; using fallback metadata.");
-		return fallback;
+		const message = error instanceof Error ? error.message : String(error);
+		const reason = message ? `Preflight request failed: ${message}` : "Preflight request failed.";
+		logDebug(`Preflight failed: ${reason}`);
+		return { status: "error", reason };
 	}
 }
 
@@ -529,26 +610,13 @@ function limitContextMessages(messages: Message[], limit: number): Message[] {
 	return messages.slice(-limit);
 }
 
-function buildFallbackMetadata(toolCalls: ToolCallSummary[]): Record<string, ToolPreflightMetadata> {
-	const entries: Record<string, ToolPreflightMetadata> = {};
-
-	for (const toolCall of toolCalls) {
-		entries[toolCall.id] = {
-			summary: "Review requested action",
-			destructive: false,
-			confidence: "low",
-		};
-	}
-
-	return entries;
-}
-
 function buildPreflightPrompt(toolCalls: ToolCallSummary[]): string {
 	return [
 		"You are a tool preflight assistant.",
 		"For each tool call, return JSON mapping toolCallId to:",
-		"{ summary: string, destructive: boolean, confidence?: low|medium|high, scope?: string[] }.",
+		"{ summary: string, destructive: boolean, scope?: string[] }.",
 		"Summaries should be short, human-friendly action phrases.",
+		"Return an entry for every tool call id.",
 		"Do not mention tool names or raw arguments in the summary.",
 		"destructive = true only if the call changes data or system state.",
 		"Respond with JSON only (no markdown, no extra text).",
@@ -604,7 +672,6 @@ function arrayToPreflight(items: unknown[]): Record<string, ToolPreflightMetadat
 			toolCallId?: string;
 			summary?: string;
 			destructive?: boolean;
-			confidence?: "low" | "medium" | "high";
 			scope?: string[];
 		};
 		const id = record.toolCallId ?? record.id;
@@ -613,7 +680,6 @@ function arrayToPreflight(items: unknown[]): Record<string, ToolPreflightMetadat
 		result[id] = {
 			summary: record.summary,
 			destructive: record.destructive,
-			confidence: record.confidence,
 			scope: Array.isArray(record.scope) ? record.scope.filter((item) => typeof item === "string") : undefined,
 		};
 	}
@@ -623,25 +689,21 @@ function arrayToPreflight(items: unknown[]): Record<string, ToolPreflightMetadat
 function normalizePreflight(
 	parsed: Record<string, ToolPreflightMetadata> | undefined,
 	toolCalls: ToolCallSummary[],
-	fallback: Record<string, ToolPreflightMetadata>,
-): Record<string, ToolPreflightMetadata> {
+): Record<string, ToolPreflightMetadata> | undefined {
+	if (!parsed) return undefined;
 	const result: Record<string, ToolPreflightMetadata> = {};
 	for (const toolCall of toolCalls) {
-		const entry = parsed?.[toolCall.id];
-		const summary =
-			sanitizeSummary(entry?.summary, toolCall) ??
-			fallback[toolCall.id]?.summary ??
-			"Review requested action";
-		const destructive =
-			entry && typeof entry.destructive === "boolean"
-				? entry.destructive
-				: fallback[toolCall.id]?.destructive ?? false;
+		const entry = parsed[toolCall.id];
+		if (!entry || typeof entry.summary !== "string" || typeof entry.destructive !== "boolean") {
+			return undefined;
+		}
+		const summary = sanitizeSummary(entry.summary, toolCall) ?? entry.summary.trim();
+		if (!summary) return undefined;
 
 		result[toolCall.id] = {
 			summary,
-			destructive,
-			confidence: entry?.confidence ?? fallback[toolCall.id]?.confidence,
-			scope: Array.isArray(entry?.scope) ? entry?.scope?.filter((item) => typeof item === "string") : undefined,
+			destructive: entry.destructive,
+			scope: Array.isArray(entry.scope) ? entry.scope.filter((item) => typeof item === "string") : undefined,
 		};
 	}
 
@@ -692,9 +754,9 @@ async function collectApprovals(
 
 	const approvalTargets = toolCalls.filter((toolCall) => {
 		if (config.approvalMode === "all") return true;
-		if (config.approvalMode === "destructive") {
-			const destructive = preflight[toolCall.id]?.destructive ?? false;
-			return destructive;
+			if (config.approvalMode === "destructive") {
+			const metadata = preflight[toolCall.id];
+			return metadata?.destructive ?? false;
 		}
 		return false;
 	});
@@ -715,7 +777,7 @@ async function collectApprovals(
 	for (const toolCall of approvalTargets) {
 		const metadata = preflight[toolCall.id];
 		const summary = metadata?.summary ?? "Review requested action";
-		const destructive = metadata?.destructive ?? false;
+		const destructive = metadata?.destructive ?? true;
 		const scopeText = metadata?.scope?.length ? `Scope: ${metadata.scope.join(", ")}` : undefined;
 		const scopeWarn = scopeText ? isScopeOutsideWorkspace(metadata?.scope ?? [], ctx.cwd) : false;
 		const scopeLine = scopeText ? formatScopeLine(scopeText, scopeWarn) : undefined;
@@ -730,6 +792,66 @@ async function collectApprovals(
 	}
 
 	return approvals;
+}
+
+function buildAllowAllApprovals(
+	toolCalls: ToolCallSummary[],
+): Record<string, { allow: boolean; reason?: string }> {
+	const approvals: Record<string, { allow: boolean; reason?: string }> = {};
+	for (const toolCall of toolCalls) {
+		approvals[toolCall.id] = { allow: true };
+	}
+	return approvals;
+}
+
+function buildBlockAllApprovals(
+	toolCalls: ToolCallSummary[],
+	reason: string,
+): Record<string, { allow: boolean; reason?: string }> {
+	const approvals: Record<string, { allow: boolean; reason?: string }> = {};
+	for (const toolCall of toolCalls) {
+		approvals[toolCall.id] = { allow: false, reason };
+	}
+	return approvals;
+}
+
+async function handlePreflightFailure(
+	toolCalls: ToolCallSummary[],
+	reason: string,
+	ctx: ExtensionContext,
+	logDebug: DebugLogger,
+): Promise<PreflightFailureDecision> {
+	const toolList = formatToolCallList(toolCalls);
+	const failureSummary = `Preflight failed: ${reason}`;
+	const message = toolList ? `${failureSummary}\nTool calls: ${toolList}` : failureSummary;
+
+	if (!ctx.hasUI) {
+		console.warn(`[bo-pi] ${message}`);
+		logDebug(message);
+		return { action: "block", reason: failureSummary };
+	}
+
+	ctx.ui.notify(message, "warning");
+	const selection = await ctx.ui.select("Preflight failed", [
+		"Retry preflight",
+		"Allow tool call(s) without preflight",
+		"Block tool call(s)",
+	]);
+
+	if (!selection) {
+		return { action: "block", reason: `${failureSummary} (no response from user).` };
+	}
+	if (selection.startsWith("Retry")) {
+		return { action: "retry" };
+	}
+	if (selection.startsWith("Allow")) {
+		return { action: "allow" };
+	}
+	return { action: "block", reason: `${failureSummary} (blocked by user).` };
+}
+
+function formatToolCallList(toolCalls: ToolCallSummary[]): string {
+	return toolCalls.map((toolCall) => toolCall.name).join(", ");
 }
 
 function sanitizeSummary(summary: string | undefined, toolCall: ToolCallSummary): string | undefined {
