@@ -1,6 +1,9 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { streamSimple } from "@mariozechner/pi-ai";
-import type { AssistantMessage, Context, Message, TextContent } from "@mariozechner/pi-ai";
+import type { AssistantMessage, Context, Message, Model, TextContent } from "@mariozechner/pi-ai";
 
 interface ToolPreflightMetadata {
 	summary: string;
@@ -36,42 +39,335 @@ type PreflightExtensionAPI = ExtensionAPI & {
 	on(event: "tool_calls_batch", handler: ToolCallsBatchHandler): void;
 };
 
+type ConfigScope = "session" | "persistent";
+
+type ModelRef = { provider: string; id: string };
+
+interface PreflightConfig {
+	enabled: boolean;
+	contextMessages: number;
+	model: "current" | ModelRef;
+}
+
+interface SessionConfigEntryData {
+	config?: unknown;
+}
+
 const MAX_ARGS_CHARS = 1200;
+const SESSION_ENTRY_TYPE = "bo-pi-config";
+const DEFAULT_CONFIG: PreflightConfig = {
+	enabled: true,
+	contextMessages: 12,
+	model: "current",
+};
+
+let persistentConfig = loadPersistentConfig();
+let sessionOverride: Partial<PreflightConfig> = {};
 
 export default function (pi: ExtensionAPI) {
 	const preflightApi = pi as PreflightExtensionAPI;
 
+	preflightApi.on("session_start", (_event, ctx) => {
+		refreshConfigs(ctx);
+	});
+
+	preflightApi.on("session_switch", (_event, ctx) => {
+		refreshConfigs(ctx);
+	});
+
+	pi.registerCommand("preflight", {
+		description: "Configure tool preflight approvals",
+		handler: async (args, ctx) => {
+			await handlePreflightCommand(args, ctx, pi);
+		},
+	});
+
 	preflightApi.on("tool_calls_batch", async (event, ctx) => {
-		const preflight = await buildPreflightMetadata(event, ctx);
+		const activeConfig = getActiveConfig();
+		if (!activeConfig.enabled) {
+			return undefined;
+		}
+
+		const preflight = await buildPreflightMetadata(event, ctx, activeConfig);
 		const approvals = ctx.hasUI ? await collectApprovals(event.toolCalls, preflight, ctx) : undefined;
 		return { preflight, approvals };
 	});
 }
 
+function refreshConfigs(ctx: ExtensionContext): void {
+	persistentConfig = loadPersistentConfig();
+	sessionOverride = loadSessionOverrides(ctx);
+}
+
+function getActiveConfig(): PreflightConfig {
+	return { ...persistentConfig, ...sessionOverride };
+}
+
+async function handlePreflightCommand(args: string, ctx: ExtensionContext, pi: ExtensionAPI): Promise<void> {
+	const trimmed = args.trim();
+	if (!trimmed) {
+		if (!ctx.hasUI) return;
+		await openConfigMenu(ctx, pi);
+		return;
+	}
+
+	const parts = trimmed.split(/\s+/);
+	const action = parts[0]?.toLowerCase();
+	const scope = parseScope(parts);
+
+	if (action === "status") {
+		showStatus(ctx, getActiveConfig());
+		return;
+	}
+
+	if (action === "on" || action === "off") {
+		applyConfig({ enabled: action === "on" }, scope, pi, ctx);
+		showStatus(ctx, getActiveConfig());
+		return;
+	}
+
+	if (action === "context") {
+		const value = Number(parts[1]);
+		if (!Number.isFinite(value) || value < 0) {
+			notify(ctx, "Invalid context value. Use a non-negative number.");
+			return;
+		}
+		applyConfig({ contextMessages: Math.floor(value) }, scope, pi, ctx);
+		showStatus(ctx, getActiveConfig());
+		return;
+	}
+
+	if (action === "model") {
+		const modelRef = parseModelRef(parts.slice(1));
+		if (!modelRef) {
+			notify(ctx, "Invalid model. Use 'current' or 'provider/model-id'.");
+			return;
+		}
+		applyConfig({ model: modelRef }, scope, pi, ctx);
+		showStatus(ctx, getActiveConfig());
+		return;
+	}
+
+	if (action === "reset-session") {
+		clearSessionOverrides(pi);
+		showStatus(ctx, getActiveConfig());
+		return;
+	}
+
+	notify(ctx, "Unknown command. Use /preflight for the interactive menu.");
+}
+
+async function openConfigMenu(ctx: ExtensionContext, pi: ExtensionAPI): Promise<void> {
+	const activeConfig = getActiveConfig();
+	const options = [
+		{
+			key: "toggle",
+			label: `Enabled: ${activeConfig.enabled ? "on" : "off"}`,
+		},
+		{
+			key: "context",
+			label: `Context messages: ${formatContextMessages(activeConfig.contextMessages)}`,
+		},
+		{
+			key: "model",
+			label: `Model: ${formatModelSetting(activeConfig.model, ctx.model)}`,
+		},
+		{
+			key: "clear-session",
+			label: sessionOverrideExists()
+				? "Clear session overrides"
+				: "Clear session overrides (none)",
+		},
+		{
+			key: "status",
+			label: "Show status",
+		},
+	];
+
+	const selection = await ctx.ui.select("Preflight settings", options.map((option) => option.label));
+	if (!selection) return;
+
+	const selected = options.find((option) => option.label === selection);
+	if (!selected) return;
+
+	switch (selected.key) {
+		case "toggle": {
+			const scope = await promptScope(ctx);
+			if (!scope) return;
+			applyConfig({ enabled: !activeConfig.enabled }, scope, pi, ctx);
+			showStatus(ctx, getActiveConfig());
+			break;
+		}
+		case "context": {
+			const input = await ctx.ui.input(
+				"Context messages (0 = full context)",
+				String(activeConfig.contextMessages),
+			);
+			if (!input) return;
+			const value = Number(input.trim());
+			if (!Number.isFinite(value) || value < 0) {
+				notify(ctx, "Invalid context value. Use a non-negative number.");
+				return;
+			}
+			const scope = await promptScope(ctx);
+			if (!scope) return;
+			applyConfig({ contextMessages: Math.floor(value) }, scope, pi, ctx);
+			showStatus(ctx, getActiveConfig());
+			break;
+		}
+		case "model": {
+			const selectionModel = await chooseModel(ctx, activeConfig.model);
+			if (!selectionModel) return;
+			const scope = await promptScope(ctx);
+			if (!scope) return;
+			applyConfig({ model: selectionModel }, scope, pi, ctx);
+			showStatus(ctx, getActiveConfig());
+			break;
+		}
+		case "clear-session": {
+			if (!sessionOverrideExists()) {
+				notify(ctx, "No session overrides to clear.");
+				return;
+			}
+			const confirm = await ctx.ui.confirm("Clear session overrides", "Reset session-only settings?");
+			if (!confirm) return;
+			clearSessionOverrides(pi);
+			showStatus(ctx, getActiveConfig());
+			break;
+		}
+		case "status": {
+			showStatus(ctx, activeConfig);
+			break;
+		}
+		default:
+			break;
+	}
+}
+
+function parseScope(args: string[]): ConfigScope {
+	const lower = args.map((part) => part.toLowerCase());
+	if (lower.includes("--persistent") || lower.includes("persistent") || lower.includes("--persist")) {
+		return "persistent";
+	}
+	return "session";
+}
+
+async function promptScope(ctx: ExtensionContext): Promise<ConfigScope | undefined> {
+	if (!ctx.hasUI) return "session";
+	const selection = await ctx.ui.select("Apply setting", ["Session only", "Persistent (all sessions)"]);
+	if (!selection) return undefined;
+	return selection.startsWith("Persistent") ? "persistent" : "session";
+}
+
+async function chooseModel(
+	ctx: ExtensionContext,
+	currentModel: PreflightConfig["model"],
+): Promise<PreflightConfig["model"] | undefined> {
+	if (!ctx.hasUI) return currentModel;
+
+	const mode = await ctx.ui.select("Preflight model", [
+		`Use current model (${formatModelSetting("current", ctx.model)})`,
+		"Pick from available models",
+		"Enter provider/model",
+	]);
+	if (!mode) return undefined;
+
+	if (mode.startsWith("Use current")) {
+		return "current";
+	}
+
+	if (mode.startsWith("Pick")) {
+		const models = ctx.modelRegistry.getAvailable();
+		if (models.length === 0) {
+			notify(ctx, "No available models with API keys configured.");
+			return undefined;
+		}
+		const labels = models.map((model) => `${model.provider}/${model.id}`);
+		const selected = await ctx.ui.select("Select model", labels);
+		if (!selected) return undefined;
+		const [provider, id] = selected.split("/");
+		if (!provider || !id) return undefined;
+		return { provider, id };
+	}
+
+	const input = await ctx.ui.input("Enter provider/model", formatModelSetting(currentModel, ctx.model));
+	if (!input) return undefined;
+	return parseModelRef([input]);
+}
+
+function parseModelRef(parts: string[]): PreflightConfig["model"] | undefined {
+	if (parts.length === 0) return undefined;
+	const joined = parts.join(" ").trim();
+	if (!joined) return undefined;
+	if (joined === "current") return "current";
+
+	const [provider, id] = joined.split("/");
+	if (!provider || !id) return undefined;
+	return { provider, id };
+}
+
+function applyConfig(
+	update: Partial<PreflightConfig>,
+	scope: ConfigScope,
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+): void {
+	if (scope === "persistent") {
+		persistentConfig = { ...persistentConfig, ...update };
+		savePersistentConfig(persistentConfig);
+	} else {
+		sessionOverride = { ...sessionOverride, ...update };
+		pi.appendEntry(SESSION_ENTRY_TYPE, { config: sessionOverride });
+	}
+	notify(ctx, "Preflight settings updated.");
+}
+
+function clearSessionOverrides(pi: ExtensionAPI): void {
+	sessionOverride = {};
+	pi.appendEntry(SESSION_ENTRY_TYPE, { config: null });
+}
+
+function sessionOverrideExists(): boolean {
+	return Object.keys(sessionOverride).length > 0;
+}
+
+function showStatus(ctx: ExtensionContext, config: PreflightConfig): void {
+	const lines = [
+		`Enabled: ${config.enabled ? "on" : "off"}`,
+		`Context messages: ${formatContextMessages(config.contextMessages)}`,
+		`Model: ${formatModelSetting(config.model, ctx.model)}`,
+		`Scope: ${sessionOverrideExists() ? "session override" : "persistent"}`,
+	];
+
+	notify(ctx, lines.join("\n"));
+}
+
+function notify(ctx: ExtensionContext, message: string): void {
+	if (ctx.hasUI) {
+		ctx.ui.notify(message, "info");
+	}
+}
+
 async function buildPreflightMetadata(
 	event: ToolCallsBatchEvent,
 	ctx: ExtensionContext,
+	config: PreflightConfig,
 ): Promise<Record<string, ToolPreflightMetadata>> {
 	const fallback = buildFallbackMetadata(event.toolCalls);
-
-	const model = ctx.model;
-	if (!model) {
-		return fallback;
-	}
-
-	const apiKey = await ctx.modelRegistry.getApiKey(model);
-	if (!apiKey) {
+	const modelWithKey = await resolveModelWithApiKey(ctx, config);
+	if (!modelWithKey) {
 		return fallback;
 	}
 
 	const instruction = buildPreflightPrompt(event.toolCalls);
+	const trimmedContext = limitContextMessages(event.llmContext.messages, config.contextMessages);
 	const preflightContext: Context = {
 		...event.llmContext,
-		messages: [...event.llmContext.messages, event.assistantMessage, createUserMessage(instruction)],
+		messages: [...trimmedContext, event.assistantMessage, createUserMessage(instruction)],
 	};
 
 	try {
-		const response = await streamSimple(model, preflightContext, { apiKey });
+		const response = await streamSimple(modelWithKey.model, preflightContext, { apiKey: modelWithKey.apiKey });
 		for await (const _ of response) {
 			// Drain stream to completion.
 		}
@@ -82,6 +378,33 @@ async function buildPreflightMetadata(
 	} catch (error) {
 		return fallback;
 	}
+}
+
+async function resolveModelWithApiKey(
+	ctx: ExtensionContext,
+	config: PreflightConfig,
+): Promise<{ model: Model<any>; apiKey: string } | undefined> {
+	const candidates: Model<any>[] = [];
+	if (config.model === "current") {
+		if (ctx.model) candidates.push(ctx.model);
+	} else {
+		const explicit = ctx.modelRegistry.find(config.model.provider, config.model.id);
+		if (explicit) candidates.push(explicit);
+		if (ctx.model && ctx.model !== explicit) candidates.push(ctx.model);
+	}
+
+	for (const model of candidates) {
+		const apiKey = await ctx.modelRegistry.getApiKey(model);
+		if (apiKey) return { model, apiKey };
+	}
+
+	return undefined;
+}
+
+function limitContextMessages(messages: Message[], limit: number): Message[] {
+	if (!Number.isFinite(limit) || limit <= 0) return messages;
+	if (messages.length <= limit) return messages;
+	return messages.slice(-limit);
 }
 
 function buildFallbackMetadata(toolCalls: ToolCallSummary[]): Record<string, ToolPreflightMetadata> {
@@ -277,4 +600,109 @@ function isLikelyDestructive(toolName: string): boolean {
 		default:
 			return false;
 	}
+}
+
+function formatContextMessages(limit: number): string {
+	if (limit <= 0) return "full";
+	return String(limit);
+}
+
+function formatModelSetting(modelSetting: PreflightConfig["model"], currentModel?: Model<any>): string {
+	if (modelSetting === "current") {
+		if (currentModel) {
+			return `current (${currentModel.provider}/${currentModel.id})`;
+		}
+		return "current";
+	}
+	return `${modelSetting.provider}/${modelSetting.id}`;
+}
+
+function loadPersistentConfig(): PreflightConfig {
+	const filePath = getConfigFilePath();
+	if (!existsSync(filePath)) return { ...DEFAULT_CONFIG };
+
+	try {
+		const content = readFileSync(filePath, "utf-8");
+		const parsed = JSON.parse(content) as unknown;
+		const config = parseConfig(parsed);
+		return { ...DEFAULT_CONFIG, ...config };
+	} catch (error) {
+		return { ...DEFAULT_CONFIG };
+	}
+}
+
+function savePersistentConfig(config: PreflightConfig): void {
+	const filePath = getConfigFilePath();
+	mkdirSync(dirname(filePath), { recursive: true });
+	writeFileSync(filePath, `${JSON.stringify(config, null, 2)}\n`);
+}
+
+function loadSessionOverrides(ctx: ExtensionContext): Partial<PreflightConfig> {
+	const entries = ctx.sessionManager.getBranch();
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const entry = entries[i];
+		if (!isCustomEntry(entry)) continue;
+		if (entry.customType !== SESSION_ENTRY_TYPE) continue;
+		const data = entry.data as SessionConfigEntryData | undefined;
+		if (!data || data.config === null) return {};
+		return parseConfig(data.config);
+	}
+	return {};
+}
+
+function parseConfig(value: unknown): Partial<PreflightConfig> {
+	if (!value || typeof value !== "object") return {};
+
+	const record = value as Record<string, unknown>;
+	const config: Partial<PreflightConfig> = {};
+
+	if (typeof record.enabled === "boolean") {
+		config.enabled = record.enabled;
+	}
+
+	if (typeof record.contextMessages === "number" && Number.isFinite(record.contextMessages)) {
+		config.contextMessages = Math.max(0, Math.floor(record.contextMessages));
+	}
+
+	if (record.model === "current") {
+		config.model = "current";
+	} else if (isModelRef(record.model)) {
+		config.model = record.model;
+	}
+
+	return config;
+}
+
+function isModelRef(value: unknown): value is ModelRef {
+	if (!value || typeof value !== "object") return false;
+	const record = value as Record<string, unknown>;
+	return typeof record.provider === "string" && typeof record.id === "string";
+}
+
+function isCustomEntry(entry: { type: string; customType?: string; data?: unknown }): entry is {
+	type: "custom";
+	customType: string;
+	data?: unknown;
+} {
+	return entry.type === "custom" && typeof entry.customType === "string";
+}
+
+function getConfigFilePath(): string {
+	return join(getAgentDir(), "extensions", "bo-pi.json");
+}
+
+function getAgentDir(): string {
+	const envDir = process.env.PI_CODING_AGENT_DIR;
+	if (envDir) {
+		return expandTilde(envDir);
+	}
+	return join(homedir(), ".pi", "agent");
+}
+
+function expandTilde(value: string): string {
+	if (value === "~") return homedir();
+	if (value.startsWith("~/")) {
+		return join(homedir(), value.slice(2));
+	}
+	return value;
 }
