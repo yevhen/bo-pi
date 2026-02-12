@@ -158,7 +158,7 @@ async function handlePreflightCommand(args: string, ctx: ExtensionContext, pi: E
 		const rawValue = parts.slice(1).join(" ");
 		const parsed = parseContextValue(rawValue);
 		if (parsed === undefined) {
-			notify(ctx, "Invalid context value. Use 'full', '0' (tool-call only), or a positive number.");
+			notify(ctx, "Invalid explain context value. Use 'full' or a positive number.");
 			return;
 		}
 		applyConfig({ contextMessages: parsed }, scope, pi, ctx);
@@ -303,7 +303,7 @@ async function openScopedConfigMenu(
 			},
 			{
 				key: "context",
-				label: `Context messages: ${formatContextMessages(scopedConfig.contextMessages)}`,
+				label: `Explain context: ${formatContextMessages(scopedConfig.contextMessages)}`,
 			},
 			{
 				key: "model",
@@ -334,19 +334,10 @@ async function openScopedConfigMenu(
 				break;
 			}
 			case "context": {
-				const selection = await ctx.ui.select("Context messages", [
-					"Full context",
-					"Tool-call only",
-					"Last N messages",
-				]);
+				const selection = await ctx.ui.select("Explain context", ["Full context", "Last N messages"]);
 				if (!selection) return;
 				if (selection.startsWith("Full")) {
 					applyConfig({ contextMessages: -1 }, scope, pi, ctx);
-					showStatus(ctx, getActiveConfig());
-					break;
-				}
-				if (selection.startsWith("Tool-call")) {
-					applyConfig({ contextMessages: 0 }, scope, pi, ctx);
 					showStatus(ctx, getActiveConfig());
 					break;
 				}
@@ -517,7 +508,7 @@ function sessionOverrideExists(): boolean {
 function showStatus(ctx: ExtensionContext, config: PreflightConfig): void {
 	const lines = [
 		`Mode: ${formatApprovalMode(config.approvalMode)}`,
-		`Context messages: ${formatContextMessages(config.contextMessages)}`,
+		`Explain context: ${formatContextMessages(config.contextMessages)}`,
 		`Model: ${formatModelSetting(config.model, ctx.model)}`,
 		`Debug: ${config.debug ? "on" : "off"}`,
 		`Scope: ${sessionOverrideExists() ? "session override" : "persistent"}`,
@@ -558,12 +549,11 @@ async function buildPreflightMetadata(
 		return { status: "error", reason };
 	}
 
-	const contextLabel = formatContextLabel(config.contextMessages);
 	logDebug(`Preflight model: ${modelWithKey.model.provider}/${modelWithKey.model.id}.`);
-	logDebug(`Preflight context: ${contextLabel} messages.`);
+	logDebug("Preflight context: tool-call only.");
 
 	const instruction = buildPreflightPrompt(event.toolCalls);
-	const trimmedContext = limitContextMessages(event.llmContext.messages, config.contextMessages);
+	const trimmedContext = limitContextMessages(event.llmContext.messages, 0);
 	const preflightContext: Context = {
 		...event.llmContext,
 		messages: [...trimmedContext, event.assistantMessage, createUserMessage(instruction)],
@@ -712,9 +702,14 @@ function buildExplainPrompt(
 
 	const lines = [
 		"You are explaining a tool call before execution.",
-		"Provide 1-3 short sentences describing what will happen.",
+		"Write two short paragraphs without headings, labels, or bullet points.",
+		"First paragraph: what will happen (include concrete details from the tool call).",
+		"Second paragraph: why this is needed for the user's request, citing relevant context details.",
+		"End with a single risk line formatted exactly: '<Level> risk: <reason>'.",
+		"Use Level = Low, Med, or High.",
 		"You may mention tool names and key arguments like file paths or commands.",
 		"Avoid markdown and do not include JSON.",
+		"If context details are missing, say so explicitly in the second paragraph.",
 		`Summary: ${summary}`,
 		`Destructive: ${destructive ? "yes" : "no"}.`,
 	];
@@ -920,9 +915,9 @@ async function requestApproval(
 			const hasExplain = explainKeys.length > 0;
 
 			const resolveMiddleLine = (): string | undefined => {
-				if (status === "loading") return formatExplainLine("Fetching explanation...");
+				if (status === "loading") return formatMutedLine("Fetching explanation...");
 				if (status === "error" && statusMessage) return formatWarningLine(statusMessage);
-				if (explanation) return formatExplainLine(`Explanation: ${explanation}`);
+				if (explanation) return formatExplainLine(explanation);
 				return scopeLine;
 			};
 
@@ -1163,6 +1158,10 @@ function formatKeyList(keys: KeyId[]): string {
 	return keys.join("/");
 }
 
+function formatMutedLine(text: string): string {
+	return `${ANSI_MUTED}${text}${ANSI_RESET}`;
+}
+
 function formatTitleLine(text: string): string {
 	return `${ANSI_MUTED}${text}${ANSI_RESET}`;
 }
@@ -1178,7 +1177,18 @@ function formatScopeLine(text: string, warn: boolean): string {
 }
 
 function formatExplainLine(text: string): string {
-	return `${ANSI_MUTED}${text}${ANSI_RESET}`;
+	const lines = text.split("\n");
+	return lines.map((line) => formatExplainLineSegment(line)).join("\n");
+}
+
+function formatExplainLineSegment(line: string): string {
+	const match = line.match(/^(low|med|high)\s+risk:\s*/i);
+	if (!match) {
+		return `${ANSI_RESET}${line}`;
+	}
+	const prefix = match[0];
+	const rest = line.slice(prefix.length);
+	return `${ANSI_RESET}${ANSI_SCOPE_WARNING}${prefix}${ANSI_RESET}${rest}`;
 }
 
 function formatWarningLine(text: string): string {
@@ -1313,29 +1323,22 @@ function formatApprovalMode(mode: ApprovalMode): string {
 
 function formatContextMessages(limit: number): string {
 	if (limit < 0) return "full";
-	if (limit === 0) return "tool-call only";
-	return String(limit);
+	return String(limit <= 0 ? 1 : limit);
 }
 
 function formatContextLabel(limit: number): string {
 	if (limit < 0) return "full";
-	if (limit === 0) return "tool-call only";
-	return `last ${limit}`;
+	const safeLimit = limit <= 0 ? 1 : limit;
+	return `last ${safeLimit}`;
 }
 
 function parseContextValue(value: string): number | undefined {
 	const trimmed = value.trim().toLowerCase();
 	if (!trimmed) return undefined;
 	if (trimmed === "full") return -1;
-	if (trimmed === "tool-call" || trimmed === "tool call" || trimmed === "tool-call only") {
-		return 0;
-	}
-	if (trimmed === "none" || trimmed === "toolcall" || trimmed === "toolcall only") {
-		return 0;
-	}
 	const numberValue = Number(trimmed);
 	if (!Number.isFinite(numberValue)) return undefined;
-	if (numberValue < 0) return -1;
+	if (numberValue < 1) return undefined;
 	return Math.floor(numberValue);
 }
 
@@ -1394,7 +1397,13 @@ function parseConfig(value: unknown): Partial<PreflightConfig> {
 
 	if (typeof record.contextMessages === "number" && Number.isFinite(record.contextMessages)) {
 		const normalized = Math.floor(record.contextMessages);
-		config.contextMessages = normalized < 0 ? -1 : normalized;
+		if (normalized < 0) {
+			config.contextMessages = -1;
+		} else if (normalized === 0) {
+			config.contextMessages = 1;
+		} else {
+			config.contextMessages = normalized;
+		}
 	}
 
 	const explainKey = parseExplainKey(record.explainKey);
