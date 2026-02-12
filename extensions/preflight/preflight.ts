@@ -1,7 +1,13 @@
-import type { ExtensionContext, ToolCallsBatchEvent, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { Context } from "@mariozechner/pi-ai";
-import type { DebugLogger, PreflightAttempt, PreflightConfig, ToolCallSummary } from "./types.js";
+import type {
+	DebugLogger,
+	PreflightAttempt,
+	PreflightConfig,
+	ToolCallSummary,
+	ToolCallsContext,
+} from "./types.js";
 import {
 	createUserMessage,
 	extractJsonPayload,
@@ -13,7 +19,7 @@ import {
 import { capitalizeFirst, escapeRegExp } from "./utils/text.js";
 
 export async function buildPreflightMetadata(
-	event: ToolCallsBatchEvent,
+	event: ToolCallsContext,
 	ctx: ExtensionContext,
 	config: PreflightConfig,
 	logDebug: DebugLogger,
@@ -32,7 +38,7 @@ export async function buildPreflightMetadata(
 	const trimmedContext = limitContextMessages(event.llmContext.messages, 0);
 	const preflightContext: Context = {
 		...event.llmContext,
-		messages: [...trimmedContext, event.assistantMessage, createUserMessage(instruction)],
+		messages: [...trimmedContext, createUserMessage(instruction)],
 	};
 
 	try {

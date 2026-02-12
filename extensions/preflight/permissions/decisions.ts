@@ -1,4 +1,4 @@
-import type { ExtensionContext, ToolCallsBatchEvent, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
 import type {
 	DebugLogger,
 	PermissionRule,
@@ -8,6 +8,7 @@ import type {
 	PolicyRule,
 	PreflightConfig,
 	ToolCallSummary,
+	ToolCallsContext,
 	ToolDecision,
 } from "../types.js";
 import { evaluatePolicyRule } from "./policy.js";
@@ -19,7 +20,7 @@ import {
 } from "./matching.js";
 
 export async function resolveToolDecisions(
-	event: ToolCallsBatchEvent,
+	event: ToolCallsContext,
 	preflight: Record<string, ToolPreflightMetadata>,
 	ctx: ExtensionContext,
 	config: PreflightConfig,

@@ -1,10 +1,16 @@
-import type { ExtensionContext, ToolCallsBatchEvent, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
-import type { DebugLogger, PreflightConfig, ToolCallSummary, ToolDecision } from "../types.js";
+import type { ExtensionContext, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
+import type {
+	DebugLogger,
+	PreflightConfig,
+	ToolCallSummary,
+	ToolCallsContext,
+	ToolDecision,
+} from "../types.js";
 import { persistPolicyOverride, persistWorkspaceRule } from "../permissions/persistence.js";
 import { requestApproval } from "./approval-ui.js";
 
 export async function collectApprovals(
-	event: ToolCallsBatchEvent,
+	event: ToolCallsContext,
 	preflight: Record<string, ToolPreflightMetadata>,
 	decisions: Record<string, ToolDecision>,
 	ctx: ExtensionContext,

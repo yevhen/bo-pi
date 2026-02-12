@@ -1,8 +1,17 @@
-import type { ToolCallsBatchEvent, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
+import type { Api, Context, Model } from "@mariozechner/pi-ai";
 import type { KeyId } from "@mariozechner/pi-tui";
 
-export type ToolCallSummary = ToolCallsBatchEvent["toolCalls"][number];
+export interface ToolCallSummary {
+	id: string;
+	name: string;
+	args: Record<string, unknown>;
+}
+
+export interface ToolCallsContext {
+	toolCalls: ToolCallSummary[];
+	llmContext: Context;
+}
 
 export type DebugLogger = (message: string) => void;
 

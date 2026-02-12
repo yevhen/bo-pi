@@ -1,8 +1,4 @@
-import type {
-	ExtensionContext,
-	ToolCallsBatchEvent,
-	ToolPreflightMetadata,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
 import { DynamicBorder, keyHint, rawKeyHint } from "@mariozechner/pi-coding-agent";
 import {
 	Container,
@@ -15,7 +11,14 @@ import {
 } from "@mariozechner/pi-tui";
 import { buildToolCallExplanation } from "../explain.js";
 import { isScopeOutsideWorkspace } from "../utils/path.js";
-import type { ApprovalDecision, DebugLogger, PreflightConfig, ToolCallSummary, ToolDecision } from "../types.js";
+import type {
+	ApprovalDecision,
+	DebugLogger,
+	PreflightConfig,
+	ToolCallSummary,
+	ToolCallsContext,
+	ToolDecision,
+} from "../types.js";
 
 const ANSI_RESET = "\u001b[0m";
 const ANSI_ACTION = "\u001b[38;5;110m";
@@ -24,7 +27,7 @@ const ANSI_SCOPE_WARNING = "\u001b[38;5;222m";
 const ANSI_MUTED = "\u001b[38;5;244m";
 
 export async function requestApproval(
-	event: ToolCallsBatchEvent,
+	event: ToolCallsContext,
 	toolCall: ToolCallSummary,
 	metadata: ToolPreflightMetadata | undefined,
 	decision: ToolDecision | undefined,

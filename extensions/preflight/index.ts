@@ -1,4 +1,7 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { convertToLlm } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@mariozechner/pi-coding-agent";
+import type { Message } from "@mariozechner/pi-ai";
 import {
 	SESSION_ENTRY_TYPE,
 	formatApprovalMode,
@@ -12,16 +15,24 @@ import {
 	savePersistentConfig,
 } from "./config.js";
 import { createDebugLogger } from "./logger.js";
-import type { ConfigScope, PreflightConfig } from "./types.js";
+import type {
+	ConfigScope,
+	DebugLogger,
+	PreflightConfig,
+	ToolCallSummary,
+	ToolCallsContext,
+} from "./types.js";
 import { notify } from "./ui.js";
 import { buildPreflightMetadata } from "./preflight.js";
 import { handlePreflightFailure } from "./approvals/failure.js";
-import { collectApprovals, buildAllowAllApprovals, buildBlockAllApprovals } from "./approvals/index.js";
+import { collectApprovals } from "./approvals/index.js";
 import { loadPermissionsState } from "./permissions/state.js";
 import { resolveToolDecisions } from "./permissions/decisions.js";
 
 let persistentConfig = loadPersistentConfig();
 let sessionOverride: Partial<PreflightConfig> = {};
+let lastContextSnapshot: AgentMessage[] | undefined;
+const blockedToolCalls = new Map<string, string>();
 
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
@@ -32,6 +43,10 @@ export default function (pi: ExtensionAPI) {
 		refreshConfigs(ctx);
 	});
 
+	pi.on("context", (event) => {
+		lastContextSnapshot = [...event.messages];
+	});
+
 	pi.registerCommand("preflight", {
 		description: "Configure tool preflight approvals",
 		handler: async (args, ctx) => {
@@ -39,7 +54,7 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.on("tool_calls_batch", async (event, ctx) => {
+	pi.on("tool_call", async (event, ctx) => {
 		const activeConfig = getActiveConfig();
 		const logDebug = createDebugLogger(ctx, activeConfig);
 		const permissions = loadPermissionsState(ctx.cwd, logDebug);
@@ -52,27 +67,37 @@ export default function (pi: ExtensionAPI) {
 			return undefined;
 		}
 
-		logDebug(`Preflight batch: ${event.toolCalls.length} tool call${event.toolCalls.length === 1 ? "" : "s"}.`);
+		const toolCall = toToolCallSummary(event);
+		const toolCalls = [toolCall];
+		const preflightEvent = buildToolCallsContext(toolCalls, ctx, logDebug);
 
-		let preflightResult = await buildPreflightMetadata(event, ctx, activeConfig, logDebug);
+		logDebug(`Preflight tool call: ${toolCall.name}.`);
+
+		let preflightResult = await buildPreflightMetadata(preflightEvent, ctx, activeConfig, logDebug);
 		while (preflightResult.status === "error") {
-			const decision = await handlePreflightFailure(event.toolCalls, preflightResult.reason, ctx, logDebug);
+			const decision = await handlePreflightFailure(toolCalls, preflightResult.reason, ctx, logDebug);
 			if (decision.action === "retry") {
-				preflightResult = await buildPreflightMetadata(event, ctx, activeConfig, logDebug);
+				preflightResult = await buildPreflightMetadata(preflightEvent, ctx, activeConfig, logDebug);
 				continue;
 			}
 			if (decision.action === "allow") {
-				const approvals = buildAllowAllApprovals(event.toolCalls);
-				return { approvals };
+				return undefined;
 			}
-			const approvals = buildBlockAllApprovals(event.toolCalls, decision.reason);
-			return { approvals };
+			recordBlockedToolCall(toolCall.id, decision.reason);
+			return { block: true, reason: decision.reason };
 		}
 
 		const preflight = preflightResult.metadata;
-		const decisions = await resolveToolDecisions(event, preflight, ctx, activeConfig, permissions, logDebug);
+		const decisions = await resolveToolDecisions(
+			preflightEvent,
+			preflight,
+			ctx,
+			activeConfig,
+			permissions,
+			logDebug,
+		);
 		const approvals = await collectApprovals(
-			event,
+			preflightEvent,
 			preflight,
 			decisions,
 			ctx,
@@ -82,13 +107,43 @@ export default function (pi: ExtensionAPI) {
 		if (approvals && Object.keys(approvals).length > 0) {
 			logDebug(`Preflight approvals collected for ${Object.keys(approvals).length} tool call(s).`);
 		}
-		return { preflight, approvals };
+
+		const approval = approvals?.[toolCall.id];
+		if (approval) {
+			if (!approval.allow) {
+				const reason = approval.reason ?? "Blocked by user.";
+				recordBlockedToolCall(toolCall.id, reason);
+				return { block: true, reason };
+			}
+			return undefined;
+		}
+
+		const decision = decisions[toolCall.id];
+		if (decision?.decision === "deny") {
+			const reason = decision.reason ?? "Blocked by policy.";
+			recordBlockedToolCall(toolCall.id, reason);
+			return { block: true, reason };
+		}
+
+		return undefined;
+	});
+
+	pi.on("tool_result", (event) => {
+		const reason = blockedToolCalls.get(event.toolCallId);
+		if (!reason) return undefined;
+		blockedToolCalls.delete(event.toolCallId);
+		return {
+			content: [{ type: "text", text: reason }],
+			isError: false,
+		};
 	});
 }
 
 function refreshConfigs(ctx: ExtensionContext): void {
 	persistentConfig = loadPersistentConfig();
 	sessionOverride = loadSessionOverrides(ctx);
+	lastContextSnapshot = undefined;
+	blockedToolCalls.clear();
 }
 
 function getActiveConfig(): PreflightConfig {
@@ -475,4 +530,50 @@ function showStatus(ctx: ExtensionContext, config: PreflightConfig): void {
 	];
 
 	notify(ctx, lines.join("\n"));
+}
+
+function buildToolCallsContext(
+	toolCalls: ToolCallSummary[],
+	ctx: ExtensionContext,
+	logDebug: DebugLogger,
+): ToolCallsContext {
+	return {
+		toolCalls,
+		llmContext: {
+			systemPrompt: ctx.getSystemPrompt(),
+			messages: resolveContextMessages(ctx, logDebug),
+		},
+	};
+}
+
+function resolveContextMessages(ctx: ExtensionContext, logDebug: DebugLogger): Message[] {
+	if (lastContextSnapshot && lastContextSnapshot.length > 0) {
+		logDebug("Using context snapshot for preflight.");
+		return convertToLlm(lastContextSnapshot);
+	}
+
+	const branchMessages = ctx.sessionManager
+		.getBranch()
+		.filter((entry): entry is { type: "message"; message: AgentMessage } => entry.type === "message")
+		.map((entry) => entry.message);
+
+	if (branchMessages.length === 0) {
+		logDebug("No context snapshot available for preflight.");
+		return [];
+	}
+
+	logDebug("Using session branch fallback for preflight context.");
+	return convertToLlm(branchMessages);
+}
+
+function toToolCallSummary(event: ToolCallEvent): ToolCallSummary {
+	return {
+		id: event.toolCallId,
+		name: event.toolName,
+		args: event.input as Record<string, unknown>,
+	};
+}
+
+function recordBlockedToolCall(toolCallId: string, reason: string): void {
+	blockedToolCalls.set(toolCallId, reason);
 }

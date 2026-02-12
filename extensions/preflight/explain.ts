@@ -1,8 +1,14 @@
-import type { ExtensionContext, ToolCallsBatchEvent, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { Context } from "@mariozechner/pi-ai";
 import { formatContextLabel } from "./config.js";
-import type { DebugLogger, ExplanationAttempt, PreflightConfig, ToolCallSummary } from "./types.js";
+import type {
+	DebugLogger,
+	ExplanationAttempt,
+	PreflightConfig,
+	ToolCallSummary,
+	ToolCallsContext,
+} from "./types.js";
 import {
 	createUserMessage,
 	extractText,
@@ -12,7 +18,7 @@ import {
 } from "./llm-utils.js";
 
 export async function buildToolCallExplanation(
-	event: ToolCallsBatchEvent,
+	event: ToolCallsContext,
 	toolCall: ToolCallSummary,
 	metadata: ToolPreflightMetadata | undefined,
 	ctx: ExtensionContext,
@@ -35,7 +41,7 @@ export async function buildToolCallExplanation(
 	const trimmedContext = limitContextMessages(event.llmContext.messages, config.contextMessages);
 	const explainContext: Context = {
 		...event.llmContext,
-		messages: [...trimmedContext, event.assistantMessage, createUserMessage(instruction)],
+		messages: [...trimmedContext, createUserMessage(instruction)],
 	};
 
 	try {

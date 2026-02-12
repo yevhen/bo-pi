@@ -1,7 +1,14 @@
-import type { ExtensionContext, ToolCallsBatchEvent } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { Context } from "@mariozechner/pi-ai";
-import type { DebugLogger, PolicyAttempt, PolicyRule, PreflightConfig, ToolCallSummary } from "../types.js";
+import type {
+	DebugLogger,
+	PolicyAttempt,
+	PolicyRule,
+	PreflightConfig,
+	ToolCallSummary,
+	ToolCallsContext,
+} from "../types.js";
 import {
 	createUserMessage,
 	extractJsonPayload,
@@ -12,7 +19,7 @@ import {
 } from "../llm-utils.js";
 
 export async function evaluatePolicyRule(
-	event: ToolCallsBatchEvent,
+	event: ToolCallsContext,
 	toolCall: ToolCallSummary,
 	rule: PolicyRule,
 	ctx: ExtensionContext,
@@ -29,7 +36,7 @@ export async function evaluatePolicyRule(
 	const trimmedContext = limitContextMessages(event.llmContext.messages, 0);
 	const policyContext: Context = {
 		...event.llmContext,
-		messages: [...trimmedContext, event.assistantMessage, createUserMessage(instruction)],
+		messages: [...trimmedContext, createUserMessage(instruction)],
 	};
 
 	try {

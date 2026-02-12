@@ -1,7 +1,12 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
-import type { ExtensionContext, ToolCallsBatchEvent } from "@mariozechner/pi-coding-agent";
-import type { AssistantMessage, Context, Usage } from "@mariozechner/pi-ai";
-import type { PermissionsState, PreflightConfig, ToolCallSummary } from "../extensions/preflight/types.js";
+import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { Context } from "@mariozechner/pi-ai";
+import type {
+	PermissionsState,
+	PreflightConfig,
+	ToolCallSummary,
+	ToolCallsContext,
+} from "../extensions/preflight/types.js";
 import { resolveToolDecisions } from "../extensions/preflight/permissions/decisions.js";
 import {
 	compilePolicyOverrideRule,
@@ -24,34 +29,13 @@ const baseConfig: PreflightConfig = {
 	debug: false,
 };
 
-const usage: Usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
-const assistantMessage: AssistantMessage = {
-	role: "assistant",
-	content: [],
-	api: "openai-completions",
-	provider: "openai",
-	model: "gpt-test",
-	usage,
-	stopReason: "stop",
-	timestamp: 0,
-};
-
 const llmContext: Context = { messages: [] };
 
-function buildEvent(toolCalls: ToolCallSummary[]): ToolCallsBatchEvent {
+function buildEvent(toolCalls: ToolCallSummary[]): ToolCallsContext {
 	return {
 		toolCalls,
-		assistantMessage,
 		llmContext,
-	} as ToolCallsBatchEvent;
+	};
 }
 
 function buildPermissions(overrides: Partial<PermissionsState> = {}): PermissionsState {
