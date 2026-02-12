@@ -3,8 +3,9 @@
 This repo contains the bo-pi extension used by pi. Use the notes below when developing or testing the extension.
 
 ## Development
-- Main extension entrypoint: `extensions/index.ts`.
-- Package metadata lives in `package.json`; pi loads extensions from `./extensions`.
+- Main extension entrypoint: `extensions/preflight/index.ts`.
+- Package metadata lives in `package.json`; `pi.extensions` lists each extension entrypoint.
+- Persistent config is stored at `~/.pi/agent/extensions/bo-pi/preflight.json`.
 
 ## Commits
 - Use imperative, short subject lines.

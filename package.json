@@ -6,7 +6,7 @@
   "keywords": ["pi-package"],
   "type": "module",
   "pi": {
-    "extensions": ["./extensions"]
+    "extensions": ["./extensions/preflight/index.ts"]
   },
   "peerDependencies": {
     "@mariozechner/pi-agent-core": "*",
