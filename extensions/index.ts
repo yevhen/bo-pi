@@ -68,6 +68,16 @@ interface PolicyRule {
 	argsMatch?: unknown;
 }
 
+interface PolicyOverrideRule {
+	raw: string;
+	tool: string;
+	specifier?: string;
+	source: PermissionSource;
+	settingsPath: string;
+	settingsDir: string;
+	argsMatch?: unknown;
+}
+
 interface PermissionRules {
 	allow: PermissionRule[];
 	ask: PermissionRule[];
@@ -77,6 +87,7 @@ interface PermissionRules {
 interface PermissionsState {
 	rules: PermissionRules;
 	policyRules: PolicyRule[];
+	policyOverrides: PolicyOverrideRule[];
 }
 
 interface PolicyEvaluation {
@@ -966,37 +977,46 @@ async function resolveToolDecisions(
 		let policyEvaluation: PolicyEvaluation | undefined;
 
 		if (decision !== "deny") {
-			const policyRule = findMatchingPolicyRule(toolCall, permissions.policyRules, ctx.cwd);
-			if (policyRule) {
-				logDebug(`Policy rule matched: ${formatRuleLabel(policyRule)}.`);
-				const policyAttempt = await evaluatePolicyRule(
-					event,
-					toolCall,
-					policyRule,
-					ctx,
-					config,
-					logDebug,
-				);
-				if (policyAttempt.status === "ok") {
-					policyEvaluation = {
-						decision: policyAttempt.decision,
-						reason: policyAttempt.reason,
-						rule: policyRule,
-					};
-					const nextDecision = applyPolicyDecision(decision, policyAttempt.decision);
-					if (nextDecision !== decision) {
-						logDebug(
-							`Policy decision for ${toolCall.name} changed from ${decision} to ${nextDecision}.`,
-						);
-					}
-					decision = nextDecision;
-					if (decision === "deny" && !reason) {
-						reason = buildPolicyDenyReason(policyRule, policyAttempt.reason);
-					}
-				} else {
-					logDebug(`Policy evaluation failed: ${policyAttempt.reason}`);
-					if (decision === "allow") {
-						decision = "ask";
+			const overrideRule = findMatchingPolicyOverride(toolCall, permissions.policyOverrides, ctx.cwd);
+			if (overrideRule) {
+				logDebug(`Policy override matched: ${formatRuleLabel(overrideRule)}.`);
+			} else {
+				const policyRule = findMatchingPolicyRule(toolCall, permissions.policyRules, ctx.cwd);
+				if (policyRule) {
+					logDebug(`Policy rule matched: ${formatRuleLabel(policyRule)}.`);
+					const policyAttempt = await evaluatePolicyRule(
+						event,
+						toolCall,
+						policyRule,
+						ctx,
+						config,
+						logDebug,
+					);
+					if (policyAttempt.status === "ok") {
+						policyEvaluation = {
+							decision: policyAttempt.decision,
+							reason: policyAttempt.reason,
+							rule: policyRule,
+						};
+						const policyDenied = policyAttempt.decision === "deny";
+						let nextDecision = applyPolicyDecision(decision, policyAttempt.decision);
+						if (policyDenied && ctx.hasUI) {
+							nextDecision = "ask";
+						}
+						if (nextDecision !== decision) {
+							logDebug(
+								`Policy decision for ${toolCall.name} changed from ${decision} to ${nextDecision}.`,
+							);
+						}
+						decision = nextDecision;
+						if (decision === "deny" && !reason) {
+							reason = buildPolicyDenyReason(policyRule, policyAttempt.reason);
+						}
+					} else {
+						logDebug(`Policy evaluation failed: ${policyAttempt.reason}`);
+						if (decision === "allow") {
+							decision = "ask";
+						}
 					}
 				}
 			}
@@ -1098,6 +1118,19 @@ function findMatchingPolicyRule(
 ): PolicyRule | undefined {
 	for (const rule of rules) {
 		if (matchesPolicyRule(rule, toolCall, cwd)) {
+			return rule;
+		}
+	}
+	return undefined;
+}
+
+function findMatchingPolicyOverride(
+	toolCall: ToolCallSummary,
+	rules: PolicyOverrideRule[],
+	cwd: string,
+): PolicyOverrideRule | undefined {
+	for (const rule of rules) {
+		if (matchesPolicyOverride(rule, toolCall, cwd)) {
 			return rule;
 		}
 	}
@@ -1246,9 +1279,20 @@ async function collectApprovals(
 		if (!ctx.hasUI) continue;
 
 		const metadata = preflight[toolCall.id];
-		const approvalDecision = await requestApproval(event, toolCall, metadata, ctx, config, logDebug);
+		const approvalDecision = await requestApproval(
+			event,
+			toolCall,
+			metadata,
+			decision,
+			ctx,
+			config,
+			logDebug,
+		);
 		if (approvalDecision === "allow-persist" || approvalDecision === "deny-persist") {
 			persistWorkspaceRule(toolCall, approvalDecision, ctx, logDebug);
+		}
+		if (approvalDecision === "allow-persist" && decision.policy?.decision === "deny") {
+			persistPolicyOverride(toolCall, ctx, logDebug);
 		}
 
 		const allowed = approvalDecision === "allow" || approvalDecision === "allow-persist";
@@ -1266,6 +1310,7 @@ async function requestApproval(
 	event: ToolCallsBatchEvent,
 	toolCall: ToolCallSummary,
 	metadata: ToolPreflightMetadata | undefined,
+	decision: ToolDecision | undefined,
 	ctx: ExtensionContext,
 	config: PreflightConfig,
 	logDebug: DebugLogger,
@@ -1274,17 +1319,20 @@ async function requestApproval(
 	const destructive = metadata?.destructive ?? true;
 	const scopeDetails = buildScopeDetails(metadata, ctx.cwd);
 	const scopeLine = scopeDetails ? formatScopeLine(scopeDetails.text, scopeDetails.warn) : undefined;
+	const policyLine = buildPolicyLine(decision?.policy);
+	const middleLine = combineApprovalLines([policyLine, scopeLine]);
 	const titleLine = formatTitleLine("Agent wants to:");
-	const fallbackMessage = buildApprovalMessage(summary, destructive, scopeLine);
+	const fallbackMessage = buildApprovalMessage(summary, destructive, middleLine);
+	const policyDenied = Boolean(decision?.policy && decision.policy.decision === "deny");
 	const options = [
-		{ label: "Yes", decision: "allow" as const },
+		{ label: policyDenied ? "Allow once" : "Yes", decision: "allow" as const },
 		{ label: "Always (this workspace)", decision: "allow-persist" as const },
-		{ label: "No", decision: "deny" as const },
+		{ label: policyDenied ? "Keep blocked" : "No", decision: "deny" as const },
 		{ label: "Never (this workspace)", decision: "deny-persist" as const },
 	];
 
 	try {
-		const decision = await ctx.ui.custom<ApprovalDecision | undefined>((tui, theme, _keybindings, done) => {
+		const selection = await ctx.ui.custom<ApprovalDecision | undefined>((tui, theme, _keybindings, done) => {
 			let explanation: string | undefined;
 			let status: "idle" | "loading" | "error" = "idle";
 			let statusMessage: string | undefined;
@@ -1297,11 +1345,11 @@ async function requestApproval(
 				if (status === "loading") return formatMutedLine("Fetching explanation...");
 				if (status === "error" && statusMessage) return formatWarningLine(statusMessage);
 				if (explanation) return formatExplainLine(explanation);
-				return scopeLine;
+				return middleLine;
 			};
 
 			const selector = new ApprovalSelectorComponent({
-				title: buildApprovalTitle(titleLine, summary, destructive, scopeLine),
+				title: buildApprovalTitle(titleLine, summary, destructive, middleLine),
 				options: options.map((option) => option.label),
 				theme,
 				tui,
@@ -1362,7 +1410,7 @@ async function requestApproval(
 			return selector;
 		});
 
-		return decision ?? "deny";
+		return selection ?? "deny";
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		logDebug(`Approval dialog failed: ${message}`);
@@ -1523,6 +1571,17 @@ function buildScopeDetails(
 	const text = `Scope: ${metadata.scope.join(", ")}`;
 	const warn = isScopeOutsideWorkspace(metadata.scope, cwd);
 	return { text, warn };
+}
+
+function buildPolicyLine(policy: PolicyEvaluation | undefined): string | undefined {
+	if (!policy || policy.decision !== "deny") return undefined;
+	const reason = policy.reason ? `: ${policy.reason}` : "";
+	return formatWarningLine(`Policy blocked by ${policy.rule.raw}${reason}`);
+}
+
+function combineApprovalLines(lines: Array<string | undefined>): string | undefined {
+	const filtered = lines.filter((line): line is string => Boolean(line));
+	return filtered.length > 0 ? filtered.join("\n") : undefined;
 }
 
 function normalizeKeyIds(keys: KeyId | KeyId[]): KeyId[] {
@@ -1744,6 +1803,13 @@ function loadPermissionsState(cwd: string, logDebug: DebugLogger): PermissionsSt
 	const globalRules = buildPermissionRules(globalSettings, "global", globalPath, logDebug);
 	const workspacePolicyRules = buildPolicyRules(workspaceSettings, "workspace", workspacePath, logDebug);
 	const globalPolicyRules = buildPolicyRules(globalSettings, "global", globalPath, logDebug);
+	const workspacePolicyOverrides = buildPolicyOverrides(
+		workspaceSettings,
+		"workspace",
+		workspacePath,
+		logDebug,
+	);
+	const globalPolicyOverrides = buildPolicyOverrides(globalSettings, "global", globalPath, logDebug);
 
 	return {
 		rules: {
@@ -1752,6 +1818,7 @@ function loadPermissionsState(cwd: string, logDebug: DebugLogger): PermissionsSt
 			deny: [...workspaceRules.deny, ...globalRules.deny],
 		},
 		policyRules: [...workspacePolicyRules, ...globalPolicyRules],
+		policyOverrides: [...workspacePolicyOverrides, ...globalPolicyOverrides],
 	};
 }
 
@@ -1800,6 +1867,21 @@ function buildPolicyRules(
 	}
 
 	return rules;
+}
+
+function buildPolicyOverrides(
+	settings: PermissionSettingsFile | undefined,
+	source: PermissionSource,
+	settingsPath: string,
+	logDebug: DebugLogger,
+): PolicyOverrideRule[] {
+	const preflight = settings?.preflight;
+	if (!preflight || typeof preflight !== "object") return [];
+	const overrides = extractPermissionList((preflight as Record<string, unknown>).policyOverrides);
+
+	return overrides
+		.map((rule) => compilePolicyOverrideRule(rule, source, settingsPath, logDebug))
+		.filter((rule): rule is PolicyOverrideRule => Boolean(rule));
 }
 
 function extractPermissionList(value: unknown): string[] {
@@ -1877,6 +1959,35 @@ function compilePolicyRule(
 	};
 }
 
+function compilePolicyOverrideRule(
+	pattern: string,
+	source: PermissionSource,
+	settingsPath: string,
+	logDebug: DebugLogger,
+): PolicyOverrideRule | undefined {
+	const parsed = parseToolPattern(pattern);
+	if (!parsed) {
+		logDebug(`Ignored invalid policy override: ${pattern}`);
+		return undefined;
+	}
+	const tool = normalizeToolName(parsed.tool);
+	const specifier = normalizeSpecifier(parsed.specifier);
+	const argsMatch = parseArgsMatch(tool, specifier, logDebug);
+	if (specifier && !isKnownTool(tool) && argsMatch === undefined) {
+		logDebug(`Ignored policy override with unsupported args: ${pattern}`);
+		return undefined;
+	}
+	return {
+		raw: pattern,
+		tool,
+		specifier,
+		source,
+		settingsPath,
+		settingsDir: dirname(settingsPath),
+		argsMatch,
+	};
+}
+
 function parseToolPattern(value: string): { tool: string; specifier?: string } | undefined {
 	const trimmed = value.trim();
 	if (!trimmed) return undefined;
@@ -1933,6 +2044,10 @@ function matchesPermissionRule(rule: PermissionRule, toolCall: ToolCallSummary, 
 }
 
 function matchesPolicyRule(rule: PolicyRule, toolCall: ToolCallSummary, cwd: string): boolean {
+	return matchesToolRule(rule, toolCall, cwd);
+}
+
+function matchesPolicyOverride(rule: PolicyOverrideRule, toolCall: ToolCallSummary, cwd: string): boolean {
 	return matchesToolRule(rule, toolCall, cwd);
 }
 
@@ -2067,6 +2182,25 @@ function persistWorkspaceRule(
 	}
 }
 
+function persistPolicyOverride(
+	toolCall: ToolCallSummary,
+	ctx: ExtensionContext,
+	logDebug: DebugLogger,
+): void {
+	const rule = buildRuleForToolCall(toolCall, ctx.cwd);
+	if (!rule) {
+		notify(ctx, "Could not save policy override for this tool call.");
+		logDebug(`Failed to build policy override for ${toolCall.name}.`);
+		return;
+	}
+
+	const filePath = getWorkspacePermissionsPath(ctx.cwd);
+	const saved = addPolicyOverrideToPermissionsFile(filePath, rule, ctx, logDebug);
+	if (saved) {
+		logDebug(`Saved policy override to ${filePath}: ${rule}`);
+	}
+}
+
 function addRuleToPermissionsFile(
 	filePath: string,
 	kind: PermissionDecision,
@@ -2104,6 +2238,40 @@ function addRuleToPermissionsFile(
 	return true;
 }
 
+function addPolicyOverrideToPermissionsFile(
+	filePath: string,
+	rule: string,
+	ctx: ExtensionContext,
+	logDebug: DebugLogger,
+): boolean {
+	const existing = readPermissionsFile(filePath, logDebug) ?? {};
+	const preflight = normalizePreflightRecord(existing.preflight);
+	const overrides = extractPermissionList(preflight.policyOverrides);
+
+	if (overrides.includes(rule)) {
+		notify(ctx, `Policy override already exists: ${rule}`);
+		return false;
+	}
+
+	overrides.unshift(rule);
+	const nextPreflight = {
+		...preflight.record,
+		policyOverrides: overrides,
+	};
+	const nextConfig: PermissionSettingsFile = {
+		...existing,
+		version: typeof existing.version === "number" ? existing.version : 1,
+		preflight: nextPreflight,
+	};
+
+	mkdirSync(dirname(filePath), { recursive: true });
+	writeFileSync(filePath, `${JSON.stringify(nextConfig, null, 2)}\n`);
+	if (ctx.hasUI) {
+		ctx.ui.notify(`Saved policy override: ${rule}`, "info");
+	}
+	return true;
+}
+
 function normalizePermissionsRecord(value: Record<string, unknown> | undefined): {
 	record: Record<string, unknown>;
 	allow: string[];
@@ -2115,6 +2283,15 @@ function normalizePermissionsRecord(value: Record<string, unknown> | undefined):
 	const ask = extractPermissionList(record.ask);
 	const deny = extractPermissionList(record.deny);
 	return { record, allow, ask, deny };
+}
+
+function normalizePreflightRecord(value: Record<string, unknown> | undefined): {
+	record: Record<string, unknown>;
+	policyOverrides: string[];
+} {
+	const record = value && typeof value === "object" ? { ...value } : {};
+	const policyOverrides = extractPermissionList(record.policyOverrides);
+	return { record, policyOverrides };
 }
 
 function buildRuleForToolCall(toolCall: ToolCallSummary, cwd: string): string | undefined {
