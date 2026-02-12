@@ -13,6 +13,9 @@
     "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*"
   },
+  "dependencies": {
+    "ignore": "^7.0.5"
+  },
   "files": [
     "extensions",
     "README.md",
