@@ -1,12 +1,12 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { AssistantMessage, Message, Model, TextContent } from "@mariozechner/pi-ai";
+import type { Api, AssistantMessage, Message, Model, TextContent } from "@mariozechner/pi-ai";
 import type { ModelWithKey } from "./types.js";
 
 export async function resolveModelWithApiKey(
 	ctx: ExtensionContext,
 	modelSetting: { provider: string; id: string } | "current",
 ): Promise<ModelWithKey | undefined> {
-	const candidates: Model<unknown>[] = [];
+	const candidates: Model<Api>[] = [];
 	if (modelSetting === "current") {
 		if (ctx.model) candidates.push(ctx.model);
 	} else {

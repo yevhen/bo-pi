@@ -68,7 +68,7 @@ function buildPolicyPrompt(rule: PolicyRule, toolCall: ToolCallSummary): string 
 	].join("\n");
 }
 
-function parsePolicyResponse(
+export function parsePolicyResponse(
 	text: string,
 ): { decision: "allow" | "ask" | "deny"; reason: string } | undefined {
 	if (!text) return undefined;
@@ -90,7 +90,7 @@ function parsePolicyResponse(
 	}
 }
 
-function parsePolicyDecision(value: unknown): "allow" | "ask" | "deny" | undefined {
+export function parsePolicyDecision(value: unknown): "allow" | "ask" | "deny" | undefined {
 	if (typeof value !== "string") return undefined;
 	const lowered = value.trim().toLowerCase();
 	if (lowered === "allow") return "allow";

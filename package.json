@@ -13,8 +13,16 @@
     "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*"
   },
+  "scripts": {
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
   "dependencies": {
     "ignore": "^7.0.5"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^3.2.4",
+    "vitest": "^3.2.4"
   },
   "files": [
     "extensions",

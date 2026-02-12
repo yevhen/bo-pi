@@ -84,7 +84,7 @@ function buildPreflightPrompt(toolCalls: ToolCallSummary[]): string {
 	].join("\n");
 }
 
-function parsePreflightResponse(text: string): Record<string, ToolPreflightMetadata> | undefined {
+export function parsePreflightResponse(text: string): Record<string, ToolPreflightMetadata> | undefined {
 	if (!text) return undefined;
 
 	const cleaned = stripCodeFence(text.trim());
@@ -129,7 +129,7 @@ function arrayToPreflight(items: unknown[]): Record<string, ToolPreflightMetadat
 	return Object.keys(result).length > 0 ? result : undefined;
 }
 
-function normalizePreflight(
+export function normalizePreflight(
 	parsed: Record<string, ToolPreflightMetadata> | undefined,
 	toolCalls: ToolCallSummary[],
 ): Record<string, ToolPreflightMetadata> | undefined {

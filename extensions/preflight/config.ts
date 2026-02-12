@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@mariozechner/pi-ai";
 import type { KeyId } from "@mariozechner/pi-tui";
 import { expandTilde } from "./utils/path.js";
 import type { ApprovalMode, ModelRef, PreflightConfig, SessionConfigEntryData } from "./types.js";
@@ -175,7 +175,7 @@ export function formatContextLabel(limit: number): string {
 
 export function formatModelSetting(
 	modelSetting: PreflightConfig["model"],
-	currentModel?: Model<unknown>,
+	currentModel?: Model<Api>,
 ): string {
 	if (modelSetting === "current") {
 		if (currentModel) {

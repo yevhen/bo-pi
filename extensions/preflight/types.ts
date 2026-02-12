@@ -1,5 +1,5 @@
 import type { ToolCallsBatchEvent, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
-import type { Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@mariozechner/pi-ai";
 import type { KeyId } from "@mariozechner/pi-tui";
 
 export type ToolCallSummary = ToolCallsBatchEvent["toolCalls"][number];
@@ -111,4 +111,4 @@ export type PreflightFailureDecision =
 
 export type ApprovalDecision = "allow" | "allow-persist" | "deny" | "deny-persist";
 
-export type ModelWithKey = { model: Model<unknown>; apiKey: string };
+export type ModelWithKey = { model: Model<Api>; apiKey: string };
