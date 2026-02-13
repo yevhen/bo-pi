@@ -7,7 +7,7 @@ Tool preflight approvals for the Pi coding agent. YOLO mode done right!
 From npm:
 
 ```bash
-pi install npm:@yevhen/bo-pi
+pi install npm:@yevhen.b/bo-pi
 ```
 
 From a local checkout:
@@ -19,7 +19,7 @@ pi install /absolute/path/to/bo-pi
 Temporary run without installing:
 
 ```bash
-pi -e npm:@yevhen/bo-pi
+pi -e npm:@yevhen.b/bo-pi
 ```
 
 ## Usage
