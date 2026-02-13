@@ -3,6 +3,12 @@
   "version": "0.0.1",
   "description": "Pi extensions for tool preflight approvals.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yevhen/bo-pi.git"
+  },
+  "bugs": "https://github.com/yevhen/bo-pi/issues",
+  "homepage": "https://github.com/yevhen/bo-pi#readme",
   "keywords": ["pi-package"],
   "type": "module",
   "pi": {
@@ -26,7 +32,10 @@
   },
   "files": [
     "extensions",
+    "docs",
     "README.md",
+    "CHANGELOG.md",
+    "RELEASING.md",
     "LICENSE",
     "package.json"
   ]

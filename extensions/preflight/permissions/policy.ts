@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { Context } from "@mariozechner/pi-ai";
+import { formatContextLabel } from "../config.js";
 import type {
 	DebugLogger,
 	PolicyAttempt,
@@ -31,9 +32,11 @@ export async function evaluatePolicyRule(
 		return { status: "error", reason: "No model or API key available for policy evaluation." };
 	}
 
+	const contextLabel = formatContextLabel(config.contextMessages);
 	logDebug(`Policy model: ${modelWithKey.model.provider}/${modelWithKey.model.id}.`);
+	logDebug(`Policy context: ${contextLabel} messages.`);
 	const instruction = buildPolicyPrompt(rule, toolCall);
-	const trimmedContext = limitContextMessages(event.llmContext.messages, 0);
+	const trimmedContext = limitContextMessages(event.llmContext.messages, config.contextMessages);
 	const policyContext: Context = {
 		...event.llmContext,
 		messages: [...trimmedContext, createUserMessage(instruction)],
