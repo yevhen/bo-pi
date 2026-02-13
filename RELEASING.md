@@ -1,6 +1,6 @@
 # Releasing
 
-This repo publishes a single npm package: `@yevhen/bo-pi`.
+This repo publishes a single npm package: `@yevhen.b/bo-pi`.
 
 ## Tag format
 
