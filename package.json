@@ -1,5 +1,5 @@
 {
-  "name": "bo-pi",
+  "name": "@yevhen/bo-pi",
   "version": "0.0.1",
   "description": "Pi extensions for tool preflight approvals.",
   "license": "MIT",

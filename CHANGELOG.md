@@ -2,7 +2,10 @@
 
 ## [Unreleased]
 ### Added
-- Document release process and preflight usage.
+- Document release process, npm publishing auth, and preflight usage.
+
+### Changed
+- Publish package under the @yevhen scope.
 
 ## [0.0.1] - 2026-02-11
 ### Added
