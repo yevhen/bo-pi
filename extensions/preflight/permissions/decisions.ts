@@ -150,7 +150,10 @@ function applyPolicyDecision(
 	return policyDecision;
 }
 
-function buildPermissionDenyReason(rule: { raw: string }): string {
+function buildPermissionDenyReason(rule: { raw: string; reason?: string }): string {
+	if (rule.reason) {
+		return `Blocked by rule ${rule.raw}: ${rule.reason}`;
+	}
 	return `Blocked by rule ${rule.raw}.`;
 }
 

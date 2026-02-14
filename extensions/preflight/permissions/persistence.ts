@@ -6,6 +6,7 @@ import type {
 	ApprovalDecision,
 	DebugLogger,
 	PermissionDecision,
+	PermissionEntry,
 	PermissionSettingsFile,
 	ToolCallSummary,
 } from "../types.js";
@@ -14,6 +15,7 @@ import { stableStringify } from "../utils/json.js";
 import { toPosixPath } from "../utils/path.js";
 import {
 	PATH_TOOLS,
+	extractPermissionEntries,
 	extractPermissionList,
 	getBashCommand,
 	getToolPath,
@@ -28,6 +30,7 @@ export function persistWorkspaceRule(
 	decision: ApprovalDecision,
 	ctx: ExtensionContext,
 	logDebug: DebugLogger,
+	reason?: string,
 ): void {
 	const ruleKind: PermissionDecision = decision === "allow-persist" ? "allow" : "deny";
 	const rule = buildRuleForToolCall(toolCall, ctx.cwd);
@@ -38,7 +41,14 @@ export function persistWorkspaceRule(
 	}
 
 	const filePath = getWorkspacePermissionsPath(ctx.cwd);
-	const saved = addRuleToPermissionsFile(filePath, ruleKind, rule, ctx, logDebug);
+	const saved = addRuleToPermissionsFile(
+		filePath,
+		ruleKind,
+		rule,
+		ctx,
+		logDebug,
+		decision === "deny-persist" ? reason : undefined,
+	);
 	if (saved) {
 		logDebug(`Saved ${ruleKind} rule to ${filePath}: ${rule}`);
 	}
@@ -69,22 +79,24 @@ function addRuleToPermissionsFile(
 	rule: string,
 	ctx: ExtensionContext,
 	logDebug: DebugLogger,
+	reason?: string,
 ): boolean {
 	const existing = readPermissionsFile(filePath, logDebug) ?? {};
 	const normalized = normalizePermissionsRecord(existing.permissions);
 
 	const list = kind === "deny" ? normalized.deny : kind === "ask" ? normalized.ask : normalized.allow;
-	if (list.includes(rule)) {
+	if (list.some((entry) => entry.rule === rule)) {
 		notify(ctx, `Rule already exists: ${rule}`);
 		return false;
 	}
 
-	list.unshift(rule);
+	const trimmedReason = reason?.trim();
+	list.unshift({ rule, reason: trimmedReason || undefined });
 	const nextPermissions = {
 		...normalized.record,
-		allow: normalized.allow,
-		ask: normalized.ask,
-		deny: normalized.deny,
+		allow: formatPermissionEntries(normalized.allow),
+		ask: formatPermissionEntries(normalized.ask),
+		deny: formatPermissionEntries(normalized.deny),
 	};
 	const nextConfig: PermissionSettingsFile = {
 		...existing,
@@ -136,15 +148,26 @@ function addPolicyOverrideToPermissionsFile(
 
 function normalizePermissionsRecord(value: Record<string, unknown> | undefined): {
 	record: Record<string, unknown>;
-	allow: string[];
-	ask: string[];
-	deny: string[];
+	allow: PermissionEntry[];
+	ask: PermissionEntry[];
+	deny: PermissionEntry[];
 } {
 	const record = value && typeof value === "object" ? { ...value } : {};
-	const allow = extractPermissionList(record.allow);
-	const ask = extractPermissionList(record.ask);
-	const deny = extractPermissionList(record.deny);
+	const allow = extractPermissionEntries(record.allow);
+	const ask = extractPermissionEntries(record.ask);
+	const deny = extractPermissionEntries(record.deny);
 	return { record, allow, ask, deny };
+}
+
+function formatPermissionEntries(
+	entries: PermissionEntry[],
+): Array<string | { rule: string; reason: string }> {
+	return entries.map((entry) => {
+		if (entry.reason) {
+			return { rule: entry.rule, reason: entry.reason };
+		}
+		return entry.rule;
+	});
 }
 
 function normalizePreflightRecord(value: Record<string, unknown> | undefined): {

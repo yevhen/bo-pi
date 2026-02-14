@@ -44,6 +44,11 @@ export interface PermissionSettingsFile {
 	preflight?: Record<string, unknown>;
 }
 
+export interface PermissionEntry {
+	rule: string;
+	reason?: string;
+}
+
 export interface PermissionRule {
 	kind: PermissionDecision;
 	raw: string;
@@ -53,6 +58,7 @@ export interface PermissionRule {
 	settingsPath: string;
 	settingsDir: string;
 	argsMatch?: unknown;
+	reason?: string;
 }
 
 export interface PolicyRule {
@@ -119,5 +125,10 @@ export type PreflightFailureDecision =
 	| { action: "block"; reason: string };
 
 export type ApprovalDecision = "allow" | "allow-persist" | "deny" | "deny-persist";
+
+export interface ApprovalResult {
+	decision: ApprovalDecision;
+	reason?: string;
+}
 
 export type ModelWithKey = { model: Model<Api>; apiKey: string };

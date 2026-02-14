@@ -42,6 +42,25 @@ describe("permission persistence", () => {
 		}
 	});
 
+	it("writes deny rules with reasons", () => {
+		const baseDir = mkdtempSync(join(tmpdir(), "bo-pi-"));
+		const cwd = join(baseDir, "repo");
+		const ctx = createCtx(cwd);
+		const toolCall: ToolCallSummary = { id: "1", name: "bash", args: { command: "rm -rf /" } };
+
+		try {
+			persistWorkspaceRule(toolCall, "deny-persist", ctx, logDebug, "Dangerous command");
+
+			const settingsPath = getWorkspacePermissionsPath(cwd);
+			const settings = readPermissionsFile(settingsPath, logDebug);
+			expect(settings?.permissions?.deny).toEqual([
+				{ rule: "Bash(rm -rf /)", reason: "Dangerous command" },
+			]);
+		} finally {
+			rmSync(baseDir, { recursive: true, force: true });
+		}
+	});
+
 	it("writes policy overrides", () => {
 		const baseDir = mkdtempSync(join(tmpdir(), "bo-pi-"));
 		const cwd = join(baseDir, "repo");

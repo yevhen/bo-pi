@@ -4,6 +4,7 @@ import ignore from "ignore";
 import type {
 	DebugLogger,
 	PermissionDecision,
+	PermissionEntry,
 	PermissionRule,
 	PermissionRules,
 	PermissionSettingsFile,
@@ -24,19 +25,25 @@ export function buildPermissionRules(
 	logDebug: DebugLogger,
 ): PermissionRules {
 	const permissions = settings?.permissions;
-	const allow = extractPermissionList(permissions?.allow);
-	const ask = extractPermissionList(permissions?.ask);
-	const deny = extractPermissionList(permissions?.deny);
+	const allow = extractPermissionEntries(permissions?.allow);
+	const ask = extractPermissionEntries(permissions?.ask);
+	const deny = extractPermissionEntries(permissions?.deny);
 
 	return {
 		allow: allow
-			.map((rule) => compilePermissionRule(rule, "allow", source, settingsPath, logDebug))
+			.map((entry) =>
+				compilePermissionRule(entry.rule, "allow", source, settingsPath, logDebug, entry.reason),
+			)
 			.filter((rule): rule is PermissionRule => Boolean(rule)),
 		ask: ask
-			.map((rule) => compilePermissionRule(rule, "ask", source, settingsPath, logDebug))
+			.map((entry) =>
+				compilePermissionRule(entry.rule, "ask", source, settingsPath, logDebug, entry.reason),
+			)
 			.filter((rule): rule is PermissionRule => Boolean(rule)),
 		deny: deny
-			.map((rule) => compilePermissionRule(rule, "deny", source, settingsPath, logDebug))
+			.map((entry) =>
+				compilePermissionRule(entry.rule, "deny", source, settingsPath, logDebug, entry.reason),
+			)
 			.filter((rule): rule is PermissionRule => Boolean(rule)),
 	};
 }
@@ -79,6 +86,30 @@ export function buildPolicyOverrides(
 		.filter((rule): rule is PolicyOverrideRule => Boolean(rule));
 }
 
+export function extractPermissionEntries(value: unknown): PermissionEntry[] {
+	if (!Array.isArray(value)) return [];
+	const entries: PermissionEntry[] = [];
+
+	for (const item of value) {
+		if (typeof item === "string") {
+			const rule = item.trim();
+			if (rule) {
+				entries.push({ rule });
+			}
+			continue;
+		}
+		if (!item || typeof item !== "object") continue;
+		const record = item as { rule?: unknown; reason?: unknown };
+		if (typeof record.rule !== "string") continue;
+		const rule = record.rule.trim();
+		if (!rule) continue;
+		const reason = typeof record.reason === "string" ? record.reason.trim() : undefined;
+		entries.push({ rule, reason: reason || undefined });
+	}
+
+	return entries;
+}
+
 export function extractPermissionList(value: unknown): string[] {
 	if (!Array.isArray(value)) return [];
 	return value
@@ -93,6 +124,7 @@ export function compilePermissionRule(
 	source: PermissionSource,
 	settingsPath: string,
 	logDebug: DebugLogger,
+	reason?: string,
 ): PermissionRule | undefined {
 	const parsed = parseToolPattern(raw);
 	if (!parsed) {
@@ -106,6 +138,7 @@ export function compilePermissionRule(
 		logDebug(`Ignored rule with unsupported args: ${raw}`);
 		return undefined;
 	}
+	const trimmedReason = reason?.trim();
 	return {
 		kind,
 		raw,
@@ -115,6 +148,7 @@ export function compilePermissionRule(
 		settingsPath,
 		settingsDir: dirname(settingsPath),
 		argsMatch,
+		reason: trimmedReason || undefined,
 	};
 }
 
