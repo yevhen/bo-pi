@@ -3,7 +3,6 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type {
-	ApprovalDecision,
 	DebugLogger,
 	PermissionDecision,
 	PermissionSettingsFile,
@@ -18,6 +17,7 @@ import {
 	getBashCommand,
 	getToolPath,
 	normalizeToolName,
+	parseToolPattern,
 } from "./matching.js";
 
 const WORKSPACE_PERMISSIONS_PATH = join(".pi", "preflight", "settings.local.json");
@@ -25,11 +25,16 @@ const GLOBAL_PERMISSIONS_PATH = join(".pi", "preflight", "settings.json");
 
 export function persistWorkspaceRule(
 	toolCall: ToolCallSummary,
-	decision: ApprovalDecision,
+	decision: PermissionDecision,
 	ctx: ExtensionContext,
 	logDebug: DebugLogger,
 ): void {
-	const ruleKind: PermissionDecision = decision === "allow-persist" ? "allow" : "deny";
+	if (decision !== "allow" && decision !== "deny") {
+		notify(ctx, "Could not save rule for this tool call.");
+		logDebug(`Unsupported rule type for ${toolCall.name}: ${decision}.`);
+		return;
+	}
+	const ruleKind: PermissionDecision = decision;
 	const rule = buildRuleForToolCall(toolCall, ctx.cwd);
 	if (!rule) {
 		notify(ctx, "Could not save rule for this tool call.");
@@ -60,6 +65,26 @@ export function persistPolicyOverride(
 	const saved = addPolicyOverrideToPermissionsFile(filePath, rule, ctx, logDebug);
 	if (saved) {
 		logDebug(`Saved policy override to ${filePath}: ${rule}`);
+	}
+}
+
+export function persistPolicyRule(
+	toolCall: ToolCallSummary,
+	policy: string,
+	ctx: ExtensionContext,
+	logDebug: DebugLogger,
+): void {
+	const trimmedPolicy = policy.trim();
+	if (!trimmedPolicy) {
+		notify(ctx, "Custom rule was empty.");
+		logDebug("Failed to save policy rule: empty rule.");
+		return;
+	}
+
+	const filePath = getWorkspacePermissionsPath(ctx.cwd);
+	const saved = addPolicyRuleToPermissionsFile(filePath, toolCall, trimmedPolicy, ctx, logDebug);
+	if (saved) {
+		logDebug(`Saved policy rule for ${toolCall.name} to ${filePath}: ${trimmedPolicy}`);
 	}
 }
 
@@ -107,8 +132,8 @@ function addPolicyOverrideToPermissionsFile(
 	logDebug: DebugLogger,
 ): boolean {
 	const existing = readPermissionsFile(filePath, logDebug) ?? {};
-	const preflight = normalizePreflightRecord(existing.preflight);
-	const overrides = extractPermissionList(preflight.policyOverrides);
+	const preflight = normalizePreflightRecord(existing.preflight, undefined, logDebug);
+	const overrides = preflight.policyOverrides;
 
 	if (overrides.includes(rule)) {
 		notify(ctx, `Policy override already exists: ${rule}`);
@@ -119,6 +144,7 @@ function addPolicyOverrideToPermissionsFile(
 	const nextPreflight = {
 		...preflight.record,
 		policyOverrides: overrides,
+		llmRules: preflight.llmRules,
 	};
 	const nextConfig: PermissionSettingsFile = {
 		...existing,
@@ -130,6 +156,54 @@ function addPolicyOverrideToPermissionsFile(
 	writeFileSync(filePath, `${JSON.stringify(nextConfig, null, 2)}\n`);
 	if (ctx.hasUI) {
 		ctx.ui.notify(`Saved policy override: ${rule}`, "info");
+	}
+	return true;
+}
+
+function addPolicyRuleToPermissionsFile(
+	filePath: string,
+	toolCall: ToolCallSummary,
+	policy: string,
+	ctx: ExtensionContext,
+	logDebug: DebugLogger,
+): boolean {
+	const tool = normalizeToolName(toolCall.name);
+	if (!tool) {
+		notify(ctx, "Could not save custom rule for this tool.");
+		logDebug("Failed to save policy rule: invalid tool name.");
+		return false;
+	}
+
+	const existing = readPermissionsFile(filePath, logDebug) ?? {};
+	const preflight = normalizePreflightRecord(existing.preflight, tool, logDebug);
+	const toolRules = preflight.llmRules[tool] ?? [];
+
+	if (toolRules.includes(policy)) {
+		notify(ctx, `Policy rule already exists: ${policy}`);
+		return false;
+	}
+
+	const nextToolRules = [policy, ...toolRules];
+	const nextLlmRules = {
+		...preflight.llmRules,
+		[tool]: nextToolRules,
+	};
+
+	const nextPreflight = {
+		...preflight.record,
+		policyOverrides: preflight.policyOverrides,
+		llmRules: nextLlmRules,
+	};
+	const nextConfig: PermissionSettingsFile = {
+		...existing,
+		version: typeof existing.version === "number" ? existing.version : 1,
+		preflight: nextPreflight,
+	};
+
+	mkdirSync(dirname(filePath), { recursive: true });
+	writeFileSync(filePath, `${JSON.stringify(nextConfig, null, 2)}\n`);
+	if (ctx.hasUI) {
+		ctx.ui.notify(`Saved custom rule for ${tool}: ${policy}`, "info");
 	}
 	return true;
 }
@@ -147,13 +221,160 @@ function normalizePermissionsRecord(value: Record<string, unknown> | undefined):
 	return { record, allow, ask, deny };
 }
 
-function normalizePreflightRecord(value: Record<string, unknown> | undefined): {
+function normalizePreflightRecord(
+	value: Record<string, unknown> | undefined,
+	currentTool: string | undefined,
+	logDebug: DebugLogger,
+): {
 	record: Record<string, unknown>;
 	policyOverrides: string[];
+	llmRules: Record<string, string[]>;
 } {
 	const record = value && typeof value === "object" ? { ...value } : {};
 	const policyOverrides = extractPermissionList(record.policyOverrides);
-	return { record, policyOverrides };
+	const llmRules = normalizeLlmRules(record.llmRules, currentTool, logDebug);
+	return { record, policyOverrides, llmRules };
+}
+
+function normalizeLlmRules(
+	value: unknown,
+	currentTool: string | undefined,
+	logDebug: DebugLogger,
+): Record<string, string[]> {
+	if (!value) return {};
+
+	if (!Array.isArray(value) && typeof value === "object") {
+		return normalizeToolScopedLlmRules(value as Record<string, unknown>, logDebug);
+	}
+
+	if (!Array.isArray(value)) {
+		logDebug("Ignored invalid llmRules value while normalizing persistence state.");
+		return {};
+	}
+
+	return migrateLegacyLlmRules(value, currentTool, logDebug);
+}
+
+function normalizeToolScopedLlmRules(
+	value: Record<string, unknown>,
+	logDebug: DebugLogger,
+): Record<string, string[]> {
+	const result: Record<string, string[]> = {};
+
+	for (const [toolName, policiesValue] of Object.entries(value)) {
+		const tool = normalizeToolName(toolName);
+		if (!tool) {
+			logDebug("Ignored llmRules entry with empty tool name.");
+			continue;
+		}
+		const policies = extractPoliciesForTool(policiesValue, logDebug);
+		if (policies.length > 0) {
+			result[tool] = policies;
+		}
+	}
+
+	return result;
+}
+
+function extractPoliciesForTool(value: unknown, logDebug: DebugLogger): string[] {
+	if (typeof value === "string") {
+		const trimmed = value.trim();
+		return trimmed ? [trimmed] : [];
+	}
+	if (!Array.isArray(value)) {
+		if (value !== undefined) {
+			logDebug("Ignored invalid llmRules tool value while normalizing persistence state.");
+		}
+		return [];
+	}
+
+	const result: string[] = [];
+	for (const item of value) {
+		if (typeof item === "string") {
+			const trimmed = item.trim();
+			if (trimmed && !result.includes(trimmed)) {
+				result.push(trimmed);
+			}
+			continue;
+		}
+		if (item && typeof item === "object") {
+			const record = item as { policy?: unknown };
+			if (typeof record.policy === "string") {
+				const trimmed = record.policy.trim();
+				if (trimmed && !result.includes(trimmed)) {
+					result.push(trimmed);
+				}
+				continue;
+			}
+		}
+		logDebug("Ignored invalid llmRules policy entry while normalizing persistence state.");
+	}
+
+	return result;
+}
+
+function migrateLegacyLlmRules(
+	value: unknown[],
+	currentTool: string | undefined,
+	logDebug: DebugLogger,
+): Record<string, string[]> {
+	const result: Record<string, string[]> = {};
+
+	for (const item of value) {
+		if (typeof item === "string") {
+			const trimmed = item.trim();
+			if (!trimmed) continue;
+			if (!currentTool) {
+				logDebug("Skipped legacy global policy string during migration: current tool unavailable.");
+				continue;
+			}
+			appendPolicy(result, currentTool, trimmed);
+			continue;
+		}
+
+		if (!item || typeof item !== "object") {
+			logDebug("Ignored invalid legacy llmRules entry while migrating.");
+			continue;
+		}
+
+		const record = item as { pattern?: unknown; policy?: unknown; tool?: unknown };
+		if (typeof record.policy !== "string" || !record.policy.trim()) {
+			logDebug("Ignored legacy llmRules object without policy while migrating.");
+			continue;
+		}
+		const policy = record.policy.trim();
+
+		if (typeof record.tool === "string" && record.tool.trim()) {
+			appendPolicy(result, normalizeToolName(record.tool), policy);
+			continue;
+		}
+
+		if (typeof record.pattern === "string" && record.pattern.trim()) {
+			const parsed = parseToolPattern(record.pattern);
+			if (!parsed) {
+				logDebug(`Ignored legacy llmRules pattern during migration: ${record.pattern}`);
+				continue;
+			}
+			appendPolicy(result, normalizeToolName(parsed.tool), policy);
+			continue;
+		}
+
+		if (!currentTool) {
+			logDebug("Skipped legacy policy object during migration: current tool unavailable.");
+			continue;
+		}
+		appendPolicy(result, currentTool, policy);
+	}
+
+	return result;
+}
+
+function appendPolicy(target: Record<string, string[]>, tool: string, policy: string): void {
+	if (!tool) return;
+	if (!target[tool]) target[tool] = [];
+	if (!target[tool].includes(policy)) {
+		target[tool].push(policy);
+	}
 }
 
 function buildRuleForToolCall(toolCall: ToolCallSummary, cwd: string): string | undefined {

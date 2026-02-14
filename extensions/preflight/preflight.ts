@@ -1,12 +1,14 @@
 import type { ExtensionContext, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { Context } from "@mariozechner/pi-ai";
+import { normalizePolicyResult } from "./permissions/policy.js";
 import type {
 	DebugLogger,
 	PreflightAttempt,
 	PreflightConfig,
 	ToolCallSummary,
 	ToolCallsContext,
+	ToolPolicyDecision,
 } from "./types.js";
 import {
 	createUserMessage,
@@ -20,6 +22,7 @@ import { capitalizeFirst, escapeRegExp } from "./utils/text.js";
 
 export async function buildPreflightMetadata(
 	event: ToolCallsContext,
+	policyRulesByToolCall: Record<string, string[]>,
 	ctx: ExtensionContext,
 	config: PreflightConfig,
 	logDebug: DebugLogger,
@@ -34,12 +37,16 @@ export async function buildPreflightMetadata(
 	logDebug(`Preflight model: ${modelWithKey.model.provider}/${modelWithKey.model.id}.`);
 	logDebug("Preflight context: tool-call only.");
 
-	const instruction = buildPreflightPrompt(event.toolCalls);
+	const instruction = buildPreflightPrompt(event.toolCalls, policyRulesByToolCall);
 	const trimmedContext = limitContextMessages(event.llmContext.messages, 0);
 	const preflightContext: Context = {
 		...event.llmContext,
 		messages: [...trimmedContext, createUserMessage(instruction)],
 	};
+
+	logDebug(`Preflight prompt:\n${instruction}`);
+	logDebug(`Preflight context messages:\n${JSON.stringify(preflightContext.messages, null, 2)}`);
+	logDebug(`Preflight policy rules by tool call:\n${JSON.stringify(policyRulesByToolCall, null, 2)}`);
 
 	try {
 		const response = await streamSimple(modelWithKey.model, preflightContext, { apiKey: modelWithKey.apiKey });
@@ -48,6 +55,7 @@ export async function buildPreflightMetadata(
 		}
 		const result = await response.result();
 		const text = extractText(result.content);
+		logDebug(`Preflight raw response:\n${text ?? ""}`);
 		if (!text) {
 			const reason = "Preflight response was empty.";
 			logDebug(`Preflight failed: ${reason}`);
@@ -59,14 +67,17 @@ export async function buildPreflightMetadata(
 			logDebug(`Preflight failed: ${reason}`);
 			return { status: "error", reason };
 		}
-		const normalized = normalizePreflight(parsed, event.toolCalls);
+		logDebug(`Preflight parsed response:\n${JSON.stringify(parsed, null, 2)}`);
+		const normalized = normalizePreflight(parsed, event.toolCalls, policyRulesByToolCall);
 		if (!normalized) {
-			const reason = "Preflight response did not include all tool calls.";
+			const reason = "Preflight response did not include valid intrinsic metadata for all tool calls.";
 			logDebug(`Preflight failed: ${reason}`);
 			return { status: "error", reason };
 		}
-		logDebug(`Preflight parsed ${Object.keys(normalized).length} tool call(s).`);
-		return { status: "ok", metadata: normalized };
+		logDebug(`Preflight normalized metadata:\n${JSON.stringify(normalized.metadata, null, 2)}`);
+		logDebug(`Preflight normalized policy:\n${JSON.stringify(normalized.policyDecisions, null, 2)}`);
+		logDebug(`Preflight parsed ${Object.keys(normalized.metadata).length} tool call(s).`);
+		return { status: "ok", metadata: normalized.metadata, policyDecisions: normalized.policyDecisions };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		const reason = message ? `Preflight request failed: ${message}` : "Preflight request failed.";
@@ -75,22 +86,36 @@ export async function buildPreflightMetadata(
 	}
 }
 
-function buildPreflightPrompt(toolCalls: ToolCallSummary[]): string {
+function buildPreflightPrompt(
+	toolCalls: ToolCallSummary[],
+	policyRulesByToolCall: Record<string, string[]>,
+): string {
+	const payload = toolCalls.map((toolCall) => ({
+		toolCallId: toolCall.id,
+		name: toolCall.name,
+		args: toolCall.args,
+		policyRules: policyRulesByToolCall[toolCall.id] ?? [],
+	}));
+
 	return [
 		"You are a tool preflight assistant.",
-		"For each tool call, return JSON mapping toolCallId to:",
-		"{ summary: string, destructive: boolean, scope?: string[] }.",
-		"Summaries should be short, human-friendly action phrases.",
-		"Return an entry for every tool call id.",
-		"Do not mention tool names or raw arguments in the summary.",
-		"destructive = true only if the call changes data or system state.",
-		"Respond with JSON only (no markdown, no extra text).",
+		"Return JSON only.",
+		"Return an object mapping toolCallId to this exact shape:",
+		"{ intrinsic: { summary: string, destructive: boolean, scope?: string[] }, policy: { decision: \"allow\"|\"ask\"|\"deny\"|\"none\", reason: string } }",
+		"Rules:",
+		"- intrinsic is always required for every tool call.",
+		"- policy.decision must be allow|ask|deny when policy rules apply.",
+		"- policy.decision must be none when policyRules are empty or no rule is applicable.",
+		"- Summaries should be short, human-friendly action phrases.",
+		"- Do not mention tool names or raw arguments in the summary.",
+		"- destructive = true only if the call changes data or system state.",
+		"- No markdown, no extra text.",
 		"Tool calls:",
-		JSON.stringify(toolCalls, null, 2),
+		JSON.stringify(payload, null, 2),
 	].join("\n");
 }
 
-export function parsePreflightResponse(text: string): Record<string, ToolPreflightMetadata> | undefined {
+export function parsePreflightResponse(text: string): Record<string, unknown> | undefined {
 	if (!text) return undefined;
 
 	const cleaned = stripCodeFence(text.trim());
@@ -103,7 +128,7 @@ export function parsePreflightResponse(text: string): Record<string, ToolPreflig
 			return arrayToPreflight(parsed);
 		}
 		if (parsed && typeof parsed === "object") {
-			return parsed as Record<string, ToolPreflightMetadata>;
+			return parsed as Record<string, unknown>;
 		}
 	} catch (error) {
 		return undefined;
@@ -112,51 +137,126 @@ export function parsePreflightResponse(text: string): Record<string, ToolPreflig
 	return undefined;
 }
 
-function arrayToPreflight(items: unknown[]): Record<string, ToolPreflightMetadata> | undefined {
-	const result: Record<string, ToolPreflightMetadata> = {};
+function arrayToPreflight(items: unknown[]): Record<string, unknown> | undefined {
+	const result: Record<string, unknown> = {};
 	for (const item of items) {
 		if (!item || typeof item !== "object") continue;
 		const record = item as {
 			id?: string;
 			toolCallId?: string;
+			intrinsic?: unknown;
+			policy?: unknown;
 			summary?: string;
 			destructive?: boolean;
 			scope?: string[];
+			decision?: unknown;
+			reason?: unknown;
 		};
 		const id = record.toolCallId ?? record.id;
 		if (!id || typeof id !== "string") continue;
-		if (typeof record.summary !== "string" || typeof record.destructive !== "boolean") continue;
-		result[id] = {
-			summary: record.summary,
-			destructive: record.destructive,
-			scope: Array.isArray(record.scope) ? record.scope.filter((item) => typeof item === "string") : undefined,
-		};
+		if (record.intrinsic && record.policy) {
+			result[id] = {
+				intrinsic: record.intrinsic,
+				policy: record.policy,
+			};
+			continue;
+		}
+		if (typeof record.summary === "string" && typeof record.destructive === "boolean") {
+			result[id] = {
+				intrinsic: {
+					summary: record.summary,
+					destructive: record.destructive,
+					scope: Array.isArray(record.scope)
+						? record.scope.filter((item) => typeof item === "string")
+						: undefined,
+				},
+				policy: {
+					decision: record.decision ?? "none",
+					reason: record.reason,
+				},
+			};
+		}
 	}
 	return Object.keys(result).length > 0 ? result : undefined;
 }
 
 export function normalizePreflight(
-	parsed: Record<string, ToolPreflightMetadata> | undefined,
+	parsed: Record<string, unknown> | undefined,
 	toolCalls: ToolCallSummary[],
-): Record<string, ToolPreflightMetadata> | undefined {
+	policyRulesByToolCall: Record<string, string[]>,
+):
+	| {
+			metadata: Record<string, ToolPreflightMetadata>;
+			policyDecisions: Record<string, ToolPolicyDecision>;
+	  }
+	| undefined {
 	if (!parsed) return undefined;
-	const result: Record<string, ToolPreflightMetadata> = {};
+	const metadata: Record<string, ToolPreflightMetadata> = {};
+	const policyDecisions: Record<string, ToolPolicyDecision> = {};
+
 	for (const toolCall of toolCalls) {
 		const entry = parsed[toolCall.id];
-		if (!entry || typeof entry.summary !== "string" || typeof entry.destructive !== "boolean") {
+		if (!entry || typeof entry !== "object") {
 			return undefined;
 		}
-		const summary = sanitizeSummary(entry.summary, toolCall) ?? entry.summary.trim();
-		if (!summary) return undefined;
+		const record = entry as { intrinsic?: unknown; policy?: unknown; summary?: unknown; destructive?: unknown };
+		const intrinsicSource =
+			record.intrinsic && typeof record.intrinsic === "object"
+				? (record.intrinsic as Record<string, unknown>)
+				: (record as Record<string, unknown>);
+		const intrinsic = normalizeIntrinsic(intrinsicSource, toolCall);
+		if (!intrinsic) {
+			return undefined;
+		}
+		metadata[toolCall.id] = intrinsic;
 
-		result[toolCall.id] = {
-			summary,
-			destructive: entry.destructive,
-			scope: Array.isArray(entry.scope) ? entry.scope.filter((item) => typeof item === "string") : undefined,
+		const hasPolicyRules = (policyRulesByToolCall[toolCall.id] ?? []).length > 0;
+		policyDecisions[toolCall.id] = normalizePolicy(record.policy, hasPolicyRules);
+	}
+
+	return { metadata, policyDecisions };
+}
+
+function normalizeIntrinsic(
+	value: Record<string, unknown>,
+	toolCall: ToolCallSummary,
+): ToolPreflightMetadata | undefined {
+	if (typeof value.summary !== "string" || typeof value.destructive !== "boolean") {
+		return undefined;
+	}
+
+	const summary = sanitizeSummary(value.summary, toolCall) ?? value.summary.trim();
+	if (!summary) return undefined;
+
+	const scope = Array.isArray(value.scope) ? value.scope.filter((item): item is string => typeof item === "string") : undefined;
+
+	return {
+		summary,
+		destructive: value.destructive,
+		scope,
+	};
+}
+
+function normalizePolicy(value: unknown, hasPolicyRules: boolean): ToolPolicyDecision {
+	if (value && typeof value === "object") {
+		const record = value as { decision?: unknown; reason?: unknown };
+		const normalized = normalizePolicyResult(record.decision, record.reason);
+		if (normalized) {
+			return normalized;
+		}
+	}
+
+	if (hasPolicyRules) {
+		return {
+			decision: "none",
+			reason: "Policy response missing or invalid; fallback applied.",
 		};
 	}
 
-	return result;
+	return {
+		decision: "none",
+		reason: "No applicable policy rules.",
+	};
 }
 
 function sanitizeSummary(summary: string | undefined, toolCall: ToolCallSummary): string | undefined {
@@ -164,9 +264,7 @@ function sanitizeSummary(summary: string | undefined, toolCall: ToolCallSummary)
 	let cleaned = summary.trim();
 	if (!cleaned) return undefined;
 
-	const patterns = [
-		new RegExp(`^(run|use|execute)\\s+${escapeRegExp(toolCall.name)}\\b\\s+to\\s+`, "i"),
-	];
+	const patterns = [new RegExp(`^(run|use|execute)\\s+${escapeRegExp(toolCall.name)}\\b\\s+to\\s+`, "i")];
 
 	for (const pattern of patterns) {
 		const updated = cleaned.replace(pattern, "").trim();

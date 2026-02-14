@@ -1,32 +1,30 @@
-import { describe, expect, it, beforeEach, vi } from "vitest";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { describe, expect, it } from "vitest";
+import type { ExtensionContext, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
 import type { Context } from "@mariozechner/pi-ai";
 import type {
 	PermissionsState,
+	PolicyRule,
 	PreflightConfig,
 	ToolCallSummary,
 	ToolCallsContext,
+	ToolPolicyDecision,
 } from "../extensions/preflight/types.js";
 import { resolveToolDecisions } from "../extensions/preflight/permissions/decisions.js";
-import {
-	compilePolicyOverrideRule,
-	compilePolicyRule,
-} from "../extensions/preflight/permissions/matching.js";
-import { evaluatePolicyRule } from "../extensions/preflight/permissions/policy.js";
+import { compilePermissionRule } from "../extensions/preflight/permissions/matching.js";
 
-vi.mock("../extensions/preflight/permissions/policy.js", () => ({
-	evaluatePolicyRule: vi.fn(),
-}));
-
-const logDebug = () => {};
+const logLines: string[] = [];
+const logDebug = (message: string): void => {
+	logLines.push(message);
+};
 
 const baseConfig: PreflightConfig = {
 	contextMessages: 1,
 	explainKey: "ctrl+e",
+	ruleSuggestionKey: "ctrl+n",
 	model: "current",
 	policyModel: "current",
 	approvalMode: "all",
-	debug: false,
+	debug: true,
 };
 
 const llmContext: Context = { messages: [] };
@@ -35,6 +33,16 @@ function buildEvent(toolCalls: ToolCallSummary[]): ToolCallsContext {
 	return {
 		toolCalls,
 		llmContext,
+	};
+}
+
+function buildPolicyRule(tool: string, policy: string): PolicyRule {
+	return {
+		tool,
+		policy,
+		source: "workspace",
+		settingsPath: "/workspace/.pi/preflight/settings.local.json",
+		settingsDir: "/workspace/.pi/preflight",
 	};
 }
 
@@ -47,107 +55,111 @@ function buildPermissions(overrides: Partial<PermissionsState> = {}): Permission
 	};
 }
 
+function buildPolicy(decision: ToolPolicyDecision["decision"], reason: string): ToolPolicyDecision {
+	return { decision, reason };
+}
+
+function buildPreflight(toolCalls: ToolCallSummary[]): Record<string, ToolPreflightMetadata> {
+	const result: Record<string, ToolPreflightMetadata> = {};
+	for (const toolCall of toolCalls) {
+		result[toolCall.id] = { summary: `Handle ${toolCall.name}`, destructive: true };
+	}
+	return result;
+}
+
+function buildCtx(): ExtensionContext {
+	return { cwd: "/workspace", hasUI: false } as ExtensionContext;
+}
+
 describe("resolveToolDecisions", () => {
-	const policyMock = vi.mocked(evaluatePolicyRule);
-
-	beforeEach(() => {
-		policyMock.mockReset();
-	});
-
-	it("respects destructive-only mode", async () => {
-		const toolCalls: ToolCallSummary[] = [
-			{ id: "call-1", name: "read", args: { path: "file.txt" } },
-			{ id: "call-2", name: "write", args: { path: "file.txt", content: "hi" } },
-		];
-		const preflight = {
-			"call-1": { summary: "Read file", destructive: false },
-			"call-2": { summary: "Write file", destructive: true },
-		};
-		const config = { ...baseConfig, approvalMode: "destructive" };
-		const permissions = buildPermissions();
-		const ctx = { hasUI: false, cwd: "/workspace" } as ExtensionContext;
-
-		const decisions = await resolveToolDecisions(
-			buildEvent(toolCalls),
-			preflight,
-			ctx,
-			config,
-			permissions,
-			logDebug,
-		);
-
-		expect(decisions["call-1"].decision).toBe("allow");
-		expect(decisions["call-2"].decision).toBe("ask");
-	});
-
-	it("denies when policy blocks without UI", async () => {
-		policyMock.mockResolvedValue({ status: "ok", decision: "deny", reason: "blocked" });
-		const toolCalls: ToolCallSummary[] = [
-			{ id: "call-1", name: "mytool", args: { action: "go" } },
-		];
-		const preflight = {
-			"call-1": { summary: "Do thing", destructive: false },
-		};
-		const policyRule = compilePolicyRule(
-			"MyTool(*)",
-			"Must be approved",
+	it("keeps deterministic deny over policy allow", async () => {
+		const denyRule = compilePermissionRule(
+			"Bash(*)",
+			"deny",
 			"workspace",
 			"/workspace/.pi/preflight/settings.local.json",
-			logDebug,
+			() => {},
 		);
-		const permissions = buildPermissions({ policyRules: policyRule ? [policyRule] : [] });
-		const ctx = { hasUI: false, cwd: "/workspace" } as ExtensionContext;
-
+		const toolCalls: ToolCallSummary[] = [{ id: "call-1", name: "bash", args: { command: "ls" } }];
 		const decisions = await resolveToolDecisions(
 			buildEvent(toolCalls),
-			preflight,
-			ctx,
-			{ ...baseConfig, approvalMode: "off" },
-			permissions,
-			logDebug,
+			buildPreflight(toolCalls),
+			{ "call-1": buildPolicy("allow", "policy allow") },
+			buildCtx(),
+			baseConfig,
+			buildPermissions({ rules: { allow: [], ask: [], deny: denyRule ? [denyRule] : [] } }),
+			() => {},
 		);
 
 		expect(decisions["call-1"].decision).toBe("deny");
-		expect(decisions["call-1"].reason).toContain("Blocked by policy rule");
+		expect(decisions["call-1"].source).toBe("deterministic");
 	});
 
-	it("skips policy evaluation when override matches", async () => {
-		policyMock.mockResolvedValue({ status: "ok", decision: "deny", reason: "blocked" });
+	it("applies policy only to matching tool", async () => {
 		const toolCalls: ToolCallSummary[] = [
-			{ id: "call-1", name: "mytool", args: { action: "go" } },
+			{ id: "call-1", name: "bash", args: { command: "echo hi" } },
+			{ id: "call-2", name: "read", args: { path: "README.md" } },
 		];
-		const preflight = {
-			"call-1": { summary: "Do thing", destructive: false },
-		};
-		const policyRule = compilePolicyRule(
-			"MyTool(*)",
-			"Must be approved",
-			"workspace",
-			"/workspace/.pi/preflight/settings.local.json",
-			logDebug,
+		const decisions = await resolveToolDecisions(
+			buildEvent(toolCalls),
+			buildPreflight(toolCalls),
+			{
+				"call-1": buildPolicy("deny", "Rule blocks shell writes"),
+				"call-2": buildPolicy("deny", "Should be ignored for read"),
+			},
+			buildCtx(),
+			{ ...baseConfig, approvalMode: "off" },
+			buildPermissions({
+				policyRules: [buildPolicyRule("bash", "Only allow read-only bash")],
+			}),
+			() => {},
 		);
-		const overrideRule = compilePolicyOverrideRule(
-			"MyTool(*)",
-			"workspace",
-			"/workspace/.pi/preflight/settings.local.json",
-			logDebug,
-		);
-		const permissions = buildPermissions({
-			policyRules: policyRule ? [policyRule] : [],
-			policyOverrides: overrideRule ? [overrideRule] : [],
-		});
-		const ctx = { hasUI: false, cwd: "/workspace" } as ExtensionContext;
 
+		expect(decisions["call-1"].decision).toBe("deny");
+		expect(decisions["call-1"].source).toBe("policy");
+		expect(decisions["call-2"].decision).toBe("allow");
+		expect(decisions["call-2"].source).toBe("fallback");
+	});
+
+	it("falls back by approval mode when policy is none", async () => {
+		const toolCalls: ToolCallSummary[] = [
+			{ id: "call-1", name: "write", args: { path: "a.txt", content: "x" } },
+			{ id: "call-2", name: "read", args: { path: "a.txt" } },
+		];
+		const preflight: Record<string, ToolPreflightMetadata> = {
+			"call-1": { summary: "Write file", destructive: true },
+			"call-2": { summary: "Read file", destructive: false },
+		};
 		const decisions = await resolveToolDecisions(
 			buildEvent(toolCalls),
 			preflight,
-			ctx,
+			{
+				"call-1": buildPolicy("none", "No applicable policy rules."),
+				"call-2": buildPolicy("none", "No applicable policy rules."),
+			},
+			buildCtx(),
+			{ ...baseConfig, approvalMode: "destructive" },
+			buildPermissions(),
+			() => {},
+		);
+
+		expect(decisions["call-1"]).toMatchObject({ decision: "ask", source: "fallback" });
+		expect(decisions["call-2"]).toMatchObject({ decision: "allow", source: "fallback" });
+	});
+
+	it("logs final decision source", async () => {
+		logLines.length = 0;
+		const toolCalls: ToolCallSummary[] = [{ id: "call-1", name: "bash", args: { command: "ls" } }];
+		await resolveToolDecisions(
+			buildEvent(toolCalls),
+			buildPreflight(toolCalls),
+			{ "call-1": buildPolicy("none", "No policy") },
+			buildCtx(),
 			{ ...baseConfig, approvalMode: "off" },
-			permissions,
+			buildPermissions(),
 			logDebug,
 		);
 
-		expect(policyMock).not.toHaveBeenCalled();
-		expect(decisions["call-1"].decision).toBe("allow");
+		expect(logLines.some((line) => line.includes("source: fallback"))).toBe(true);
 	});
 });

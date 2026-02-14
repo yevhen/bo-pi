@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { ToolCallSummary } from "../extensions/preflight/types.js";
-import { compilePermissionRule, matchesPermissionRule } from "../extensions/preflight/permissions/matching.js";
+import type { PermissionSettingsFile, ToolCallSummary } from "../extensions/preflight/types.js";
+import {
+	buildPolicyRules,
+	compilePermissionRule,
+	matchesPermissionRule,
+} from "../extensions/preflight/permissions/matching.js";
 
 const logDebug = () => {};
 
@@ -59,5 +63,73 @@ describe("permission matching", () => {
 		};
 		expect(rule).toBeDefined();
 		expect(matchesPermissionRule(rule!, toolCall, "/workspace")).toBe(true);
+	});
+});
+
+describe("policy rule loading", () => {
+	it("loads tool-scoped llmRules object", () => {
+		const settings: PermissionSettingsFile = {
+			preflight: {
+				llmRules: {
+					bash: ["Rule A", "Rule B"],
+					read: ["Rule C"],
+				},
+			},
+		};
+
+		const rules = buildPolicyRules(
+			settings,
+			"workspace",
+			"/workspace/.pi/preflight/settings.local.json",
+			logDebug,
+		);
+
+		expect(rules.map((rule) => ({ tool: rule.tool, policy: rule.policy }))).toEqual([
+			{ tool: "bash", policy: "Rule A" },
+			{ tool: "bash", policy: "Rule B" },
+			{ tool: "read", policy: "Rule C" },
+		]);
+	});
+
+	it("loads legacy [{pattern, policy}] format", () => {
+		const settings: PermissionSettingsFile = {
+			preflight: {
+				llmRules: [
+					{ pattern: "Bash(*)", policy: "Rule Bash" },
+					{ pattern: "Read(./src/**)", policy: "Rule Read" },
+				],
+			},
+		};
+
+		const rules = buildPolicyRules(
+			settings,
+			"workspace",
+			"/workspace/.pi/preflight/settings.local.json",
+			logDebug,
+		);
+
+		expect(rules.map((rule) => ({ tool: rule.tool, policy: rule.policy }))).toEqual([
+			{ tool: "bash", policy: "Rule Bash" },
+			{ tool: "read", policy: "Rule Read" },
+		]);
+	});
+
+	it("loads legacy string[] as wildcard policies", () => {
+		const settings: PermissionSettingsFile = {
+			preflight: {
+				llmRules: ["Ask before destructive changes"],
+			},
+		};
+
+		const rules = buildPolicyRules(
+			settings,
+			"workspace",
+			"/workspace/.pi/preflight/settings.local.json",
+			logDebug,
+		);
+
+		expect(rules.map((rule) => ({ tool: rule.tool, policy: rule.policy }))).toEqual([
+			{ tool: "*", policy: "Ask before destructive changes" },
+		]);
 	});
 });

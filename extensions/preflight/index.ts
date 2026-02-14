@@ -28,6 +28,7 @@ import { handlePreflightFailure } from "./approvals/failure.js";
 import { collectApprovals } from "./approvals/index.js";
 import { loadPermissionsState } from "./permissions/state.js";
 import { resolveToolDecisions } from "./permissions/decisions.js";
+import { getPolicyRulesForTool } from "./permissions/matching.js";
 
 let persistentConfig = loadPersistentConfig();
 let sessionOverride: Partial<PreflightConfig> = {};
@@ -70,14 +71,33 @@ export default function (pi: ExtensionAPI) {
 		const toolCall = toToolCallSummary(event);
 		const toolCalls = [toolCall];
 		const preflightEvent = buildToolCallsContext(toolCalls, ctx, logDebug);
+		const policyRulesByToolCall: Record<string, string[]> = {};
+		for (const pendingToolCall of toolCalls) {
+			policyRulesByToolCall[pendingToolCall.id] = getPolicyRulesForTool(
+				pendingToolCall.name,
+				permissions.policyRules,
+			);
+		}
 
 		logDebug(`Preflight tool call: ${toolCall.name}.`);
 
-		let preflightResult = await buildPreflightMetadata(preflightEvent, ctx, activeConfig, logDebug);
+		let preflightResult = await buildPreflightMetadata(
+			preflightEvent,
+			policyRulesByToolCall,
+			ctx,
+			activeConfig,
+			logDebug,
+		);
 		while (preflightResult.status === "error") {
 			const decision = await handlePreflightFailure(toolCalls, preflightResult.reason, ctx, logDebug);
 			if (decision.action === "retry") {
-				preflightResult = await buildPreflightMetadata(preflightEvent, ctx, activeConfig, logDebug);
+				preflightResult = await buildPreflightMetadata(
+					preflightEvent,
+					policyRulesByToolCall,
+					ctx,
+					activeConfig,
+					logDebug,
+				);
 				continue;
 			}
 			if (decision.action === "allow") {
@@ -88,9 +108,11 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		const preflight = preflightResult.metadata;
+		const policyDecisions = preflightResult.policyDecisions;
 		const decisions = await resolveToolDecisions(
 			preflightEvent,
 			preflight,
+			policyDecisions,
 			ctx,
 			activeConfig,
 			permissions,

@@ -49,19 +49,17 @@ export function buildPolicyRules(
 ): PolicyRule[] {
 	const preflight = settings?.preflight;
 	if (!preflight || typeof preflight !== "object") return [];
-	const llmRules = (preflight as Record<string, unknown>).llmRules;
-	if (!Array.isArray(llmRules)) return [];
 
-	const rules: PolicyRule[] = [];
-	for (const item of llmRules) {
-		if (!item || typeof item !== "object") continue;
-		const record = item as { pattern?: unknown; policy?: unknown };
-		if (typeof record.pattern !== "string" || typeof record.policy !== "string") continue;
-		const compiled = compilePolicyRule(record.pattern, record.policy, source, settingsPath, logDebug);
-		if (compiled) rules.push(compiled);
-	}
+	const entries = extractPolicyEntries((preflight as Record<string, unknown>).llmRules, logDebug);
+	if (entries.length === 0) return [];
 
-	return rules;
+	return entries.map((entry) => ({
+		tool: entry.tool,
+		policy: entry.policy,
+		source,
+		settingsPath,
+		settingsDir: dirname(settingsPath),
+	}));
 }
 
 export function buildPolicyOverrides(
@@ -85,6 +83,141 @@ export function extractPermissionList(value: unknown): string[] {
 		.filter((item): item is string => typeof item === "string")
 		.map((item) => item.trim())
 		.filter((item) => item.length > 0);
+}
+
+export function getPolicyRulesForTool(toolName: string, rules: PolicyRule[]): string[] {
+	const normalizedTool = normalizeToolName(toolName);
+	const seen = new Set<string>();
+	const policies: string[] = [];
+
+	for (const rule of rules) {
+		if (rule.tool !== "*" && rule.tool !== normalizedTool) continue;
+		if (seen.has(rule.policy)) continue;
+		seen.add(rule.policy);
+		policies.push(rule.policy);
+	}
+
+	return policies;
+}
+
+function extractPolicyEntries(
+	value: unknown,
+	logDebug: DebugLogger,
+): Array<{ tool: string; policy: string }> {
+	if (!value) return [];
+	if (Array.isArray(value)) {
+		return extractLegacyPolicyEntries(value, logDebug);
+	}
+	if (typeof value !== "object") {
+		logDebug("Ignored invalid llmRules: expected object or array.");
+		return [];
+	}
+
+	return extractToolScopedPolicyEntries(value as Record<string, unknown>, logDebug);
+}
+
+function extractToolScopedPolicyEntries(
+	value: Record<string, unknown>,
+	logDebug: DebugLogger,
+): Array<{ tool: string; policy: string }> {
+	const entries: Array<{ tool: string; policy: string }> = [];
+
+	for (const [tool, rules] of Object.entries(value)) {
+		const normalizedTool = normalizeToolName(tool);
+		if (!normalizedTool) {
+			logDebug("Ignored llmRules entry with empty tool name.");
+			continue;
+		}
+		const policies = extractPolicyValues(rules, logDebug);
+		for (const policy of policies) {
+			entries.push({ tool: normalizedTool, policy });
+		}
+	}
+
+	return entries;
+}
+
+function extractLegacyPolicyEntries(
+	value: unknown[],
+	logDebug: DebugLogger,
+): Array<{ tool: string; policy: string }> {
+	const entries: Array<{ tool: string; policy: string }> = [];
+
+	for (const item of value) {
+		if (typeof item === "string") {
+			const policy = item.trim();
+			if (policy) {
+				entries.push({ tool: "*", policy });
+			}
+			continue;
+		}
+
+		if (!item || typeof item !== "object") {
+			logDebug("Ignored invalid legacy llmRules entry.");
+			continue;
+		}
+
+		const record = item as {
+			pattern?: unknown;
+			policy?: unknown;
+			tool?: unknown;
+		};
+		const policy = typeof record.policy === "string" ? record.policy.trim() : "";
+		if (!policy) {
+			logDebug("Ignored legacy llmRules entry without policy text.");
+			continue;
+		}
+
+		if (typeof record.tool === "string" && record.tool.trim()) {
+			entries.push({ tool: normalizeToolName(record.tool), policy });
+			continue;
+		}
+
+		if (typeof record.pattern === "string" && record.pattern.trim()) {
+			const parsed = parseToolPattern(record.pattern);
+			if (!parsed) {
+				logDebug(`Ignored legacy llmRules entry with invalid pattern: ${record.pattern}`);
+				continue;
+			}
+			entries.push({ tool: normalizeToolName(parsed.tool), policy });
+			continue;
+		}
+
+		entries.push({ tool: "*", policy });
+	}
+
+	return entries;
+}
+
+function extractPolicyValues(value: unknown, logDebug: DebugLogger): string[] {
+	if (typeof value === "string") {
+		const trimmed = value.trim();
+		return trimmed ? [trimmed] : [];
+	}
+	if (!Array.isArray(value)) {
+		if (value !== undefined) {
+			logDebug("Ignored invalid llmRules tool entry: expected array or string.");
+		}
+		return [];
+	}
+
+	const policies: string[] = [];
+	for (const item of value) {
+		if (typeof item === "string") {
+			const trimmed = item.trim();
+			if (trimmed) policies.push(trimmed);
+			continue;
+		}
+		if (item && typeof item === "object") {
+			const record = item as { policy?: unknown };
+			if (typeof record.policy === "string" && record.policy.trim()) {
+				policies.push(record.policy.trim());
+				continue;
+			}
+		}
+		logDebug("Ignored invalid llmRules policy entry.");
+	}
+	return policies;
 }
 
 export function compilePermissionRule(
@@ -111,42 +244,6 @@ export function compilePermissionRule(
 		raw,
 		tool,
 		specifier,
-		source,
-		settingsPath,
-		settingsDir: dirname(settingsPath),
-		argsMatch,
-	};
-}
-
-export function compilePolicyRule(
-	pattern: string,
-	policy: string,
-	source: PermissionSource,
-	settingsPath: string,
-	logDebug: DebugLogger,
-): PolicyRule | undefined {
-	const parsed = parseToolPattern(pattern);
-	if (!parsed) {
-		logDebug(`Ignored invalid policy rule: ${pattern}`);
-		return undefined;
-	}
-	const tool = normalizeToolName(parsed.tool);
-	const specifier = normalizeSpecifier(parsed.specifier);
-	const trimmedPolicy = policy.trim();
-	if (!trimmedPolicy) {
-		logDebug(`Ignored policy rule with empty policy: ${pattern}`);
-		return undefined;
-	}
-	const argsMatch = parseArgsMatch(tool, specifier, logDebug);
-	if (specifier && !isKnownTool(tool) && argsMatch === undefined) {
-		logDebug(`Ignored policy rule with unsupported args: ${pattern}`);
-		return undefined;
-	}
-	return {
-		raw: pattern,
-		tool,
-		specifier,
-		policy: trimmedPolicy,
 		source,
 		settingsPath,
 		settingsDir: dirname(settingsPath),
@@ -239,10 +336,6 @@ export function matchesPermissionRule(
 	toolCall: ToolCallSummary,
 	cwd: string,
 ): boolean {
-	return matchesToolRule(rule, toolCall, cwd);
-}
-
-export function matchesPolicyRule(rule: PolicyRule, toolCall: ToolCallSummary, cwd: string): boolean {
 	return matchesToolRule(rule, toolCall, cwd);
 }
 

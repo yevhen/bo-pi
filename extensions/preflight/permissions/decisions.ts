@@ -3,25 +3,24 @@ import type {
 	DebugLogger,
 	PermissionRule,
 	PermissionsState,
-	PolicyEvaluation,
 	PolicyOverrideRule,
-	PolicyRule,
 	PreflightConfig,
 	ToolCallSummary,
 	ToolCallsContext,
 	ToolDecision,
+	ToolPolicyDecision,
 } from "../types.js";
-import { evaluatePolicyRule } from "./policy.js";
 import {
 	formatRuleLabel,
+	getPolicyRulesForTool,
 	matchesPermissionRule,
 	matchesPolicyOverride,
-	matchesPolicyRule,
 } from "./matching.js";
 
 export async function resolveToolDecisions(
 	event: ToolCallsContext,
 	preflight: Record<string, ToolPreflightMetadata>,
+	policyDecisions: Record<string, ToolPolicyDecision>,
 	ctx: ExtensionContext,
 	config: PreflightConfig,
 	permissions: PermissionsState,
@@ -31,76 +30,63 @@ export async function resolveToolDecisions(
 
 	for (const toolCall of event.toolCalls) {
 		const metadata = preflight[toolCall.id];
-		const baseDecision = resolveBaseDecision(toolCall, metadata, ctx.cwd, config, permissions, logDebug);
-		let decision = baseDecision.decision;
-		let reason = baseDecision.reason;
-		let policyEvaluation: PolicyEvaluation | undefined;
-
-		if (decision !== "deny") {
-			const overrideRule = findMatchingPolicyOverride(toolCall, permissions.policyOverrides, ctx.cwd);
-			if (overrideRule) {
-				logDebug(`Policy override matched: ${formatRuleLabel(overrideRule)}.`);
-			} else {
-				const policyRule = findMatchingPolicyRule(toolCall, permissions.policyRules, ctx.cwd);
-				if (policyRule) {
-					logDebug(`Policy rule matched: ${formatRuleLabel(policyRule)}.`);
-					const policyAttempt = await evaluatePolicyRule(
-						event,
-						toolCall,
-						policyRule,
-						ctx,
-						config,
-						logDebug,
-					);
-					if (policyAttempt.status === "ok") {
-						policyEvaluation = {
-							decision: policyAttempt.decision,
-							reason: policyAttempt.reason,
-							rule: policyRule,
-						};
-						const policyDenied = policyAttempt.decision === "deny";
-						let nextDecision = applyPolicyDecision(decision, policyAttempt.decision);
-						if (policyDenied && ctx.hasUI) {
-							nextDecision = "ask";
-						}
-						if (nextDecision !== decision) {
-							logDebug(
-								`Policy decision for ${toolCall.name} changed from ${decision} to ${nextDecision}.`,
-							);
-						}
-						decision = nextDecision;
-						if (decision === "deny" && !reason) {
-							reason = buildPolicyDenyReason(policyRule, policyAttempt.reason);
-						}
-					} else {
-						logDebug(`Policy evaluation failed: ${policyAttempt.reason}`);
-						if (decision === "allow") {
-							decision = "ask";
-						}
-					}
-				}
-			}
+		const deterministic = resolveDeterministicDecision(toolCall, ctx.cwd, permissions, logDebug);
+		if (deterministic) {
+			const decision: ToolDecision = {
+				decision: deterministic.decision,
+				source: "deterministic",
+				reason: deterministic.reason,
+				rule: deterministic.rule,
+			};
+			decisions[toolCall.id] = decision;
+			logFinalDecision(toolCall, decision, logDebug);
+			continue;
 		}
 
-		decisions[toolCall.id] = {
-			decision,
-			reason,
-			rule: baseDecision.rule,
-			policy: policyEvaluation,
+		const overrideRule = findMatchingPolicyOverride(toolCall, permissions.policyOverrides, ctx.cwd);
+		if (overrideRule) {
+			logDebug(`Policy override matched: ${formatRuleLabel(overrideRule)}.`);
+		}
+
+		const applicablePolicyRules = getPolicyRulesForTool(toolCall.name, permissions.policyRules);
+		const policyDecision = policyDecisions[toolCall.id];
+		if (!overrideRule && applicablePolicyRules.length > 0 && policyDecision && policyDecision.decision !== "none") {
+			const decision: ToolDecision = {
+				decision: policyDecision.decision,
+				source: "policy",
+				reason:
+					policyDecision.decision === "deny"
+						? buildPolicyDenyReason(policyDecision.reason)
+						: undefined,
+				policy: {
+					decision: policyDecision.decision,
+					reason: policyDecision.reason,
+					rules: applicablePolicyRules,
+				},
+			};
+			decisions[toolCall.id] = decision;
+			logFinalDecision(toolCall, decision, logDebug);
+			continue;
+		}
+
+		const fallbackDecision = buildDefaultDecision(metadata, config.approvalMode);
+		const decision: ToolDecision = {
+			decision: fallbackDecision,
+			source: "fallback",
 		};
+		decisions[toolCall.id] = decision;
+		logFinalDecision(toolCall, decision, logDebug);
 	}
 
 	return decisions;
 }
 
-function resolveBaseDecision(
+function resolveDeterministicDecision(
 	toolCall: ToolCallSummary,
-	metadata: ToolPreflightMetadata | undefined,
 	cwd: string,
-	config: PreflightConfig,
 	permissions: PermissionsState,
 	logDebug: DebugLogger,
-): { decision: "allow" | "ask" | "deny"; rule?: PermissionRule; reason?: string } {
+): { decision: "allow" | "ask" | "deny"; rule?: PermissionRule; reason?: string } | undefined {
 	const denyRule = findMatchingRule(toolCall, permissions.rules.deny, cwd);
 	if (denyRule) {
 		logDebug(`Permission rule matched (deny): ${formatRuleLabel(denyRule)}.`);
@@ -123,7 +109,7 @@ function resolveBaseDecision(
 		return { decision: "allow", rule: allowRule };
 	}
 
-	return { decision: buildDefaultDecision(metadata, config.approvalMode) };
+	return undefined;
 }
 
 function buildDefaultDecision(
@@ -139,23 +125,12 @@ function buildDefaultDecision(
 	return "ask";
 }
 
-function applyPolicyDecision(
-	baseDecision: "allow" | "ask" | "deny",
-	policyDecision: "allow" | "ask" | "deny",
-): "allow" | "ask" | "deny" {
-	if (baseDecision === "deny") return "deny";
-	if (baseDecision === "ask") {
-		return policyDecision === "deny" ? "deny" : "ask";
-	}
-	return policyDecision;
-}
-
 function buildPermissionDenyReason(rule: { raw: string }): string {
 	return `Blocked by rule ${rule.raw}.`;
 }
 
-function buildPolicyDenyReason(rule: { raw: string }, reason: string): string {
-	return `Blocked by policy rule ${rule.raw}: ${reason}`;
+function buildPolicyDenyReason(reason: string): string {
+	return `Blocked by custom rules: ${reason}`;
 }
 
 function findMatchingRule(
@@ -166,19 +141,6 @@ function findMatchingRule(
 	for (const rule of rules) {
 		if (!rule) continue;
 		if (matchesPermissionRule(rule, toolCall, cwd)) {
-			return rule;
-		}
-	}
-	return undefined;
-}
-
-function findMatchingPolicyRule(
-	toolCall: ToolCallSummary,
-	rules: PolicyRule[],
-	cwd: string,
-): PolicyRule | undefined {
-	for (const rule of rules) {
-		if (matchesPolicyRule(rule, toolCall, cwd)) {
 			return rule;
 		}
 	}
@@ -196,4 +158,11 @@ function findMatchingPolicyOverride(
 		}
 	}
 	return undefined;
+}
+
+function logFinalDecision(toolCall: ToolCallSummary, decision: ToolDecision, logDebug: DebugLogger): void {
+	const reasonPart = decision.reason ? `, reason: ${decision.reason}` : "";
+	logDebug(
+		`Final decision for ${toolCall.id} (${toolCall.name}): ${decision.decision} (source: ${decision.source}${reasonPart}).`,
+	);
 }

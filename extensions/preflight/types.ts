@@ -24,6 +24,7 @@ export type ApprovalMode = "all" | "destructive" | "off";
 export interface PreflightConfig {
 	contextMessages: number;
 	explainKey: KeyId | KeyId[];
+	ruleSuggestionKey: KeyId | KeyId[];
 	model: "current" | ModelRef;
 	policyModel: "current" | ModelRef;
 	approvalMode: ApprovalMode;
@@ -56,14 +57,11 @@ export interface PermissionRule {
 }
 
 export interface PolicyRule {
-	raw: string;
 	tool: string;
-	specifier?: string;
 	policy: string;
 	source: PermissionSource;
 	settingsPath: string;
 	settingsDir: string;
-	argsMatch?: unknown;
 }
 
 export interface PolicyOverrideRule {
@@ -91,26 +89,36 @@ export interface PermissionsState {
 export interface PolicyEvaluation {
 	decision: PermissionDecision;
 	reason?: string;
-	rule: PolicyRule;
+	rules: string[];
+}
+
+export interface ToolPolicyDecision {
+	decision: PermissionDecision | "none";
+	reason: string;
 }
 
 export interface ToolDecision {
 	decision: PermissionDecision;
+	source: "deterministic" | "policy" | "fallback";
 	reason?: string;
 	rule?: PermissionRule;
 	policy?: PolicyEvaluation;
 }
 
 export type PreflightAttempt =
-	| { status: "ok"; metadata: Record<string, ToolPreflightMetadata> }
+	| {
+			status: "ok";
+			metadata: Record<string, ToolPreflightMetadata>;
+			policyDecisions: Record<string, ToolPolicyDecision>;
+	  }
 	| { status: "error"; reason: string };
 
 export type ExplanationAttempt =
 	| { status: "ok"; text: string }
 	| { status: "error"; reason: string };
 
-export type PolicyAttempt =
-	| { status: "ok"; decision: PermissionDecision; reason: string }
+export type RuleSuggestionAttempt =
+	| { status: "ok"; suggestions: string[] }
 	| { status: "error"; reason: string };
 
 export type PreflightFailureDecision =
@@ -118,6 +126,10 @@ export type PreflightFailureDecision =
 	| { action: "allow" }
 	| { action: "block"; reason: string };
 
-export type ApprovalDecision = "allow" | "allow-persist" | "deny" | "deny-persist";
+export type ApprovalDecision =
+	| { action: "allow" }
+	| { action: "allow-persist" }
+	| { action: "deny" }
+	| { action: "custom-rule"; rule: string };
 
 export type ModelWithKey = { model: Model<Api>; apiKey: string };
