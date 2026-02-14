@@ -63,7 +63,7 @@ export async function collectApprovals(
 		if (!ctx.hasUI) continue;
 
 		const metadata = preflight[toolCall.id];
-		const approvalDecision = await requestApproval(
+		const approvalResult = await requestApproval(
 			event,
 			toolCall,
 			metadata,
@@ -72,17 +72,27 @@ export async function collectApprovals(
 			config,
 			logDebug,
 		);
-		if (approvalDecision === "allow-persist" || approvalDecision === "deny-persist") {
-			persistWorkspaceRule(toolCall, approvalDecision, ctx, logDebug);
+		if (
+			approvalResult.decision === "allow-persist" ||
+			approvalResult.decision === "deny-persist"
+		) {
+			persistWorkspaceRule(
+				toolCall,
+				approvalResult.decision,
+				ctx,
+				logDebug,
+				approvalResult.reason,
+			);
 		}
-		if (approvalDecision === "allow-persist" && decision.policy?.decision === "deny") {
+		if (approvalResult.decision === "allow-persist" && decision.policy?.decision === "deny") {
 			persistPolicyOverride(toolCall, ctx, logDebug);
 		}
 
-		const allowed = approvalDecision === "allow" || approvalDecision === "allow-persist";
+		const allowed =
+			approvalResult.decision === "allow" || approvalResult.decision === "allow-persist";
 		approvals[toolCall.id] = allowed
 			? { allow: true }
-			: { allow: false, reason: "Blocked by user" };
+			: { allow: false, reason: formatUserBlockReason(approvalResult.reason) };
 	}
 
 	return Object.keys(approvals).length > 0 ? approvals : undefined;
@@ -107,4 +117,9 @@ export function buildBlockAllApprovals(
 		approvals[toolCall.id] = { allow: false, reason };
 	}
 	return approvals;
+}
+
+function formatUserBlockReason(reason?: string): string {
+	if (!reason) return "Blocked by user";
+	return `Blocked by user: ${reason}`;
 }

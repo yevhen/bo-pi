@@ -39,6 +39,8 @@ Scope: scripts/
   Never (this workspace)
 ```
 
+When you select **No** or **Never**, press **Tab** to add an optional reason. Reasons entered for **Never** are saved with the deny rule and reused in future blocks.
+
 ## Explain mode
 
 In the approval dialog, press the explain shortcut (default `ctrl+e`) to request a richer explanation. Explain uses the configured context window (`/preflight context`):
@@ -62,6 +64,21 @@ Rules are stored in:
     "allow": ["Bash(ls -la)", "Read(./docs/**)"],
     "ask": ["Write(**/*.md)"],
     "deny": ["Bash(rm -rf *)"]
+  }
+}
+```
+
+Deny rules can also include optional reasons:
+
+```json
+{
+  "permissions": {
+    "deny": [
+      {
+        "rule": "Bash(rm -rf *)",
+        "reason": "Destructive command"
+      }
+    ]
   }
 }
 ```

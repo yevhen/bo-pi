@@ -13,6 +13,7 @@ import { buildToolCallExplanation } from "../explain.js";
 import { isScopeOutsideWorkspace } from "../utils/path.js";
 import type {
 	ApprovalDecision,
+	ApprovalResult,
 	DebugLogger,
 	PreflightConfig,
 	ToolCallSummary,
@@ -26,6 +27,17 @@ const ANSI_DESTRUCTIVE = "\u001b[1;38;5;203m";
 const ANSI_SCOPE_WARNING = "\u001b[38;5;222m";
 const ANSI_MUTED = "\u001b[38;5;244m";
 
+type ApprovalOption = {
+	label: string;
+	decision: ApprovalDecision;
+	reasonAllowed?: boolean;
+};
+
+type ApprovalSelection = {
+	decision: ApprovalDecision;
+	requestReason?: boolean;
+};
+
 export async function requestApproval(
 	event: ToolCallsContext,
 	toolCall: ToolCallSummary,
@@ -34,7 +46,7 @@ export async function requestApproval(
 	ctx: ExtensionContext,
 	config: PreflightConfig,
 	logDebug: DebugLogger,
-): Promise<ApprovalDecision> {
+): Promise<ApprovalResult> {
 	const summary = metadata?.summary ?? "Review requested action";
 	const destructive = metadata?.destructive ?? true;
 	const scopeDetails = buildScopeDetails(metadata, ctx.cwd);
@@ -44,15 +56,15 @@ export async function requestApproval(
 	const titleLine = formatTitleLine("Agent wants to:");
 	const fallbackMessage = buildApprovalMessage(summary, destructive, middleLine);
 	const policyDenied = Boolean(decision?.policy && decision.policy.decision === "deny");
-	const options = [
-		{ label: policyDenied ? "Allow once" : "Yes", decision: "allow" as const },
-		{ label: "Always (this workspace)", decision: "allow-persist" as const },
-		{ label: policyDenied ? "Keep blocked" : "No", decision: "deny" as const },
-		{ label: "Never (this workspace)", decision: "deny-persist" as const },
+	const options: ApprovalOption[] = [
+		{ label: policyDenied ? "Allow once" : "Yes", decision: "allow" },
+		{ label: "Always (this workspace)", decision: "allow-persist" },
+		{ label: policyDenied ? "Keep blocked" : "No", decision: "deny", reasonAllowed: true },
+		{ label: "Never (this workspace)", decision: "deny-persist", reasonAllowed: true },
 	];
 
 	try {
-		const selection = await ctx.ui.custom<ApprovalDecision | undefined>((tui, theme, _keybindings, done) => {
+		const selection = await ctx.ui.custom<ApprovalSelection | undefined>((tui, theme, _keybindings, done) => {
 			let explanation: string | undefined;
 			let status: "idle" | "loading" | "error" = "idle";
 			let statusMessage: string | undefined;
@@ -70,15 +82,17 @@ export async function requestApproval(
 
 			const selector = new ApprovalSelectorComponent({
 				title: buildApprovalTitle(titleLine, summary, destructive, middleLine),
-				options: options.map((option) => option.label),
+				options,
 				theme,
 				tui,
 				explainKeys,
 				onSelect: (option) => {
-					const selected = options.find((entry) => entry.label === option);
-					done(selected?.decision ?? "deny");
+					done({ decision: option.decision });
 				},
-				onCancel: () => done("deny"),
+				onReason: (option) => {
+					done({ decision: option.decision, requestReason: true });
+				},
+				onCancel: () => done({ decision: "deny" }),
 				onExplain: hasExplain ? () => startExplain() : undefined,
 			});
 
@@ -130,17 +144,37 @@ export async function requestApproval(
 			return selector;
 		});
 
-		return selection ?? "deny";
+		const decision = selection?.decision ?? "deny";
+		const reason = selection?.requestReason ? await requestDenialReason(decision, ctx) : undefined;
+		return { decision, reason };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		logDebug(`Approval dialog failed: ${message}`);
 		const allow = await ctx.ui.confirm(titleLine, fallbackMessage);
-		return allow ? "allow" : "deny";
+		if (allow) {
+			return { decision: "allow" };
+		}
+		return { decision: "deny" };
 	}
 }
 
+async function requestDenialReason(
+	decision: ApprovalDecision,
+	ctx: ExtensionContext,
+): Promise<string | undefined> {
+	if (decision !== "deny" && decision !== "deny-persist") return undefined;
+	if (!ctx.hasUI) return undefined;
+	const prompt =
+		decision === "deny-persist"
+			? "Reason for blocking in this workspace (optional)"
+			: "Reason for blocking (optional)";
+	const input = await ctx.ui.input(prompt, "");
+	const reason = input?.trim();
+	return reason ? reason : undefined;
+}
+
 class ApprovalSelectorComponent extends Container {
-	private options: string[];
+	private options: ApprovalOption[];
 	private selectedIndex = 0;
 	private listContainer: Container;
 	private titleText: Text;
@@ -148,18 +182,20 @@ class ApprovalSelectorComponent extends Container {
 	private theme: ExtensionContext["ui"]["theme"];
 	private tui: TUI;
 	private explainKeys: KeyId[];
-	private onSelect: (option: string) => void;
+	private onSelect: (option: ApprovalOption) => void;
+	private onReason: (option: ApprovalOption) => void;
 	private onCancel: () => void;
 	private onExplain?: () => void;
 	private title: string;
 
 	constructor(options: {
 		title: string;
-		options: string[];
+		options: ApprovalOption[];
 		theme: ExtensionContext["ui"]["theme"];
 		tui: TUI;
 		explainKeys: KeyId[];
-		onSelect: (option: string) => void;
+		onSelect: (option: ApprovalOption) => void;
+		onReason: (option: ApprovalOption) => void;
 		onCancel: () => void;
 		onExplain?: () => void;
 	}) {
@@ -169,6 +205,7 @@ class ApprovalSelectorComponent extends Container {
 		this.tui = options.tui;
 		this.explainKeys = options.explainKeys;
 		this.onSelect = options.onSelect;
+		this.onReason = options.onReason;
 		this.onCancel = options.onCancel;
 		this.onExplain = options.onExplain;
 		this.title = options.title;
@@ -211,18 +248,27 @@ class ApprovalSelectorComponent extends Container {
 		if (kb.matches(keyData, "selectUp") || keyData === "k") {
 			this.selectedIndex = Math.max(0, this.selectedIndex - 1);
 			this.updateList();
+			this.updateHints();
 			this.tui.requestRender();
 			return;
 		}
 		if (kb.matches(keyData, "selectDown") || keyData === "j") {
 			this.selectedIndex = Math.min(this.options.length - 1, this.selectedIndex + 1);
 			this.updateList();
+			this.updateHints();
 			this.tui.requestRender();
 			return;
 		}
 		if (kb.matches(keyData, "selectConfirm") || keyData === "\n") {
 			const selected = this.options[this.selectedIndex];
 			if (selected) this.onSelect(selected);
+			return;
+		}
+		if (keyData === "\t") {
+			const selected = this.options[this.selectedIndex];
+			if (selected?.reasonAllowed) {
+				this.onReason(selected);
+			}
 			return;
 		}
 		if (kb.matches(keyData, "selectCancel")) {
@@ -241,16 +287,19 @@ class ApprovalSelectorComponent extends Container {
 	private updateList(): void {
 		this.listContainer.clear();
 		for (let i = 0; i < this.options.length; i++) {
-			const option = this.options[i] ?? "";
+			const option = this.options[i];
+			const label = option?.label ?? "";
 			const isSelected = i === this.selectedIndex;
 			const text = isSelected
-				? this.theme.fg("accent", "→ ") + this.theme.fg("accent", option)
-				: `  ${this.theme.fg("text", option)}`;
+				? this.theme.fg("accent", "→ ") + this.theme.fg("accent", label)
+				: `  ${this.theme.fg("text", label)}`;
 			this.listContainer.addChild(new Text(text, 1, 0));
 		}
 	}
 
 	private updateHints(): void {
+		const selected = this.options[this.selectedIndex];
+		const reasonHint = selected?.reasonAllowed ? `  ${rawKeyHint("tab", "reason")}` : "";
 		const explainHint =
 			this.explainKeys.length > 0
 				? `  ${rawKeyHint(formatKeyList(this.explainKeys), "explain")}`
@@ -261,6 +310,7 @@ class ApprovalSelectorComponent extends Container {
 			keyHint("selectConfirm", "select") +
 			"  " +
 			keyHint("selectCancel", "cancel") +
+			reasonHint +
 			explainHint;
 		this.hintText.setText(hintLine);
 	}

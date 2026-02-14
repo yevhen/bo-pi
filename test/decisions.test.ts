@@ -9,6 +9,7 @@ import type {
 } from "../extensions/preflight/types.js";
 import { resolveToolDecisions } from "../extensions/preflight/permissions/decisions.js";
 import {
+	compilePermissionRule,
 	compilePolicyOverrideRule,
 	compilePolicyRule,
 } from "../extensions/preflight/permissions/matching.js";
@@ -78,6 +79,39 @@ describe("resolveToolDecisions", () => {
 
 		expect(decisions["call-1"].decision).toBe("allow");
 		expect(decisions["call-2"].decision).toBe("ask");
+	});
+
+	it("uses deny rule reasons when available", async () => {
+		const toolCalls: ToolCallSummary[] = [
+			{ id: "call-1", name: "bash", args: { command: "rm -rf /" } },
+		];
+		const preflight = {
+			"call-1": { summary: "Remove root", destructive: true },
+		};
+		const denyRule = compilePermissionRule(
+			"Bash(rm -rf *)",
+			"deny",
+			"workspace",
+			"/workspace/.pi/preflight/settings.local.json",
+			logDebug,
+			"Safety check",
+		);
+		const permissions = buildPermissions({
+			rules: { allow: [], ask: [], deny: denyRule ? [denyRule] : [] },
+		});
+		const ctx = { hasUI: false, cwd: "/workspace" } as ExtensionContext;
+
+		const decisions = await resolveToolDecisions(
+			buildEvent(toolCalls),
+			preflight,
+			ctx,
+			{ ...baseConfig, approvalMode: "off" },
+			permissions,
+			logDebug,
+		);
+
+		expect(decisions["call-1"].decision).toBe("deny");
+		expect(decisions["call-1"].reason).toBe("Blocked by rule Bash(rm -rf *): Safety check");
 	});
 
 	it("denies when policy blocks without UI", async () => {
