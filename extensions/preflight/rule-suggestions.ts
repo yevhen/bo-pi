@@ -100,6 +100,7 @@ function buildRuleSuggestionPrompt(
 		"Line 2 must start with 'Ask '.",
 		"Line 3 must start with 'Deny '.",
 		"Each line must be only the rule text as one sentence.",
+		"Do not end lines with additional punctuation (no period, comma, colon, semicolon, exclamation, question mark).",
 		"Do not include intro text (for example: 'Here are three policy rule suggestions...').",
 		"No headings, no explanations, no bullets, no numbering, no quotes, no markdown, no JSON.",
 		"Rules should be reusable; avoid copying exact arguments unless necessary.",
