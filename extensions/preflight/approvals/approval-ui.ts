@@ -567,9 +567,8 @@ class ApprovalSelectorComponent extends Container {
 	}
 
 	private renderCustomRuleOption(option: string): string {
-		const showPrefixCursor = !this.customRuleHasInput;
-		if (showPrefixCursor) {
-			return `${formatCursorCell()} ${option}`;
+		if (!this.customRuleHasInput) {
+			return renderCursorAtFirstVisible(option);
 		}
 		return renderInputCursor(option, this.customRuleCursor);
 	}
@@ -755,6 +754,31 @@ function renderInputCursor(value: string, cursor: number): string {
 
 function formatCursorCell(value: string = " "): string {
 	return `\u001b[7m${value}\u001b[27m`;
+}
+
+function renderCursorAtFirstVisible(value: string): string {
+	let index = 0;
+	while (index < value.length) {
+		if (value[index] === "\u001b") {
+			const match = /^\u001b\[[0-9;]*m/.exec(value.slice(index));
+			if (match) {
+				index += match[0].length;
+				continue;
+			}
+		}
+		break;
+	}
+
+	if (index >= value.length) {
+		return formatCursorCell(" ");
+	}
+
+	const nextSymbol = Array.from(value.slice(index))[0];
+	if (!nextSymbol) {
+		return formatCursorCell(" ");
+	}
+	const symbolLength = nextSymbol.length;
+	return `${value.slice(0, index)}${formatCursorCell(nextSymbol)}${value.slice(index + symbolLength)}`;
 }
 
 function buildApprovalTitle(
