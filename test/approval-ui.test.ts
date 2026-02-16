@@ -6,12 +6,12 @@ import {
 } from "../extensions/preflight/approvals/approval-ui.js";
 
 describe("custom rule approval UI helpers", () => {
-	it("enables Ctrl+N suggestion cycling only when allowed", () => {
-		expect(canCycleRuleSuggestion("idle", "", 2)).toBe(true);
+	it("enables Tab suggestion accept/next only when allowed", () => {
+		expect(canCycleRuleSuggestion("idle", "", 1)).toBe(true);
 		expect(canCycleRuleSuggestion("loading", "", 2)).toBe(false);
 		expect(canCycleRuleSuggestion("idle", "typed", 2)).toBe(false);
-		expect(canCycleRuleSuggestion("idle", "", 1)).toBe(false);
-		expect(canCycleRuleSuggestion("idle", "", 2, true)).toBe(true);
+		expect(canCycleRuleSuggestion("idle", "", 0)).toBe(false);
+		expect(canCycleRuleSuggestion("idle", "Ask before bash", 2, true, true)).toBe(true);
 	});
 
 	it("shows muted suggestion by default", () => {

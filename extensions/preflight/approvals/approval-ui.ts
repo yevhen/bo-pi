@@ -65,20 +65,23 @@ export async function requestApproval(
 			let customRuleInput = "";
 			let customRuleCursor = 0;
 			let customRuleTouched = false;
+			let customRuleUsesSuggestion = false;
 			const ruleHistory: string[] = [];
 
 			const explainKeys = normalizeKeyIds(config.explainKey);
 			const hasExplain = explainKeys.length > 0;
-			const ruleSuggestionKeys = normalizeKeyIds(config.ruleSuggestionKey);
-			const hasRuleSuggestionKeys = ruleSuggestionKeys.length > 0;
 
 			const hasCustomRuleInput = (): boolean => customRuleInput.trim().length > 0;
 
-			const resolveRuleSuggestion = (): string | undefined => {
-				if (hasCustomRuleInput()) return undefined;
+			const getCurrentRuleSuggestion = (): string | undefined => {
 				if (ruleSuggestions.length === 0) return undefined;
 				const index = Math.min(ruleSuggestionIndex, ruleSuggestions.length - 1);
 				return ruleSuggestions[index];
+			};
+
+			const resolveRuleSuggestion = (): string | undefined => {
+				if (hasCustomRuleInput()) return undefined;
+				return getCurrentRuleSuggestion();
 			};
 
 			const resolveRuleSuggestionEnabled = (): boolean => {
@@ -87,6 +90,7 @@ export async function requestApproval(
 					customRuleInput,
 					ruleSuggestions.length,
 					customRuleTouched,
+					customRuleUsesSuggestion,
 				);
 			};
 
@@ -120,13 +124,36 @@ export async function requestApproval(
 			const handleCustomRuleInput = (keyData: string): boolean => {
 				const kb = getEditorKeybindings();
 				if (kb.matches(keyData, "tab")) {
-					const suggestion = resolveRuleSuggestion();
-					if (!suggestion) return false;
-					customRuleTouched = true;
-					customRuleInput = suggestion;
-					customRuleCursor = codePointLength(customRuleInput);
-					updateOptions();
-					tui.requestRender();
+					if (!resolveRuleSuggestionEnabled()) return false;
+					const hasInput = hasCustomRuleInput();
+
+					if (!hasInput) {
+						const suggestion = getCurrentRuleSuggestion();
+						if (!suggestion) return false;
+						customRuleTouched = true;
+						customRuleUsesSuggestion = true;
+						customRuleInput = suggestion;
+						customRuleCursor = codePointLength(customRuleInput);
+						updateOptions();
+						tui.requestRender();
+						return true;
+					}
+
+					if (!customRuleUsesSuggestion) return false;
+
+					if (ruleSuggestionIndex < ruleSuggestions.length - 1) {
+						ruleSuggestionIndex += 1;
+						const nextSuggestion = getCurrentRuleSuggestion();
+						if (nextSuggestion) {
+							customRuleInput = nextSuggestion;
+							customRuleCursor = codePointLength(customRuleInput);
+						}
+						updateOptions();
+						tui.requestRender();
+						return true;
+					}
+
+					startRuleSuggestionFetch();
 					return true;
 				}
 
@@ -175,6 +202,7 @@ export async function requestApproval(
 
 				if (kb.matches(keyData, "deleteCharBackward")) {
 					customRuleTouched = true;
+					customRuleUsesSuggestion = false;
 					const next = removeCharBackward(customRuleInput, customRuleCursor);
 					customRuleInput = next.value;
 					customRuleCursor = next.cursor;
@@ -184,6 +212,7 @@ export async function requestApproval(
 				}
 				if (kb.matches(keyData, "deleteCharForward")) {
 					customRuleTouched = true;
+					customRuleUsesSuggestion = false;
 					const next = removeCharForward(customRuleInput, customRuleCursor);
 					customRuleInput = next.value;
 					customRuleCursor = next.cursor;
@@ -193,6 +222,7 @@ export async function requestApproval(
 				}
 				if (kb.matches(keyData, "deleteWordBackward")) {
 					customRuleTouched = true;
+					customRuleUsesSuggestion = false;
 					const next = removeWordBackward(customRuleInput, customRuleCursor);
 					customRuleInput = next.value;
 					customRuleCursor = next.cursor;
@@ -202,6 +232,7 @@ export async function requestApproval(
 				}
 				if (kb.matches(keyData, "deleteWordForward")) {
 					customRuleTouched = true;
+					customRuleUsesSuggestion = false;
 					const next = removeWordForward(customRuleInput, customRuleCursor);
 					customRuleInput = next.value;
 					customRuleCursor = next.cursor;
@@ -211,6 +242,7 @@ export async function requestApproval(
 				}
 				if (kb.matches(keyData, "deleteToLineStart")) {
 					customRuleTouched = true;
+					customRuleUsesSuggestion = false;
 					const next = removeToLineStart(customRuleInput, customRuleCursor);
 					customRuleInput = next.value;
 					customRuleCursor = next.cursor;
@@ -220,6 +252,7 @@ export async function requestApproval(
 				}
 				if (kb.matches(keyData, "deleteToLineEnd")) {
 					customRuleTouched = true;
+					customRuleUsesSuggestion = false;
 					const next = removeToLineEnd(customRuleInput, customRuleCursor);
 					customRuleInput = next.value;
 					customRuleCursor = next.cursor;
@@ -230,6 +263,7 @@ export async function requestApproval(
 
 				if (!isPrintableInput(keyData)) return false;
 				customRuleTouched = true;
+				customRuleUsesSuggestion = false;
 				const next = insertAtCursor(customRuleInput, customRuleCursor, keyData);
 				customRuleInput = next.value;
 				customRuleCursor = next.cursor;
@@ -262,13 +296,11 @@ export async function requestApproval(
 				theme,
 				tui,
 				explainKeys,
-				ruleSuggestionKeys,
 				ruleSuggestionEnabled: resolveRuleSuggestionEnabled(),
 				customRuleIndex,
 				onSelect: (index) => handleSelection(index),
 				onCancel: () => done({ action: "deny" }),
 				onExplain: hasExplain ? () => startExplain() : undefined,
-				onRuleSuggestion: hasRuleSuggestionKeys ? () => advanceRuleSuggestion() : undefined,
 				onCustomRuleKey: (keyData) => handleCustomRuleInput(keyData),
 			});
 			selector.setCustomRuleCursor(customRuleCursor, customRuleTouched, hasCustomRuleInput());
@@ -346,6 +378,13 @@ export async function requestApproval(
 				if (result.status === "ok") {
 					applyRuleSuggestions(result.suggestions);
 					ruleStatus = "idle";
+					if (customRuleUsesSuggestion) {
+						const nextSuggestion = getCurrentRuleSuggestion();
+						if (nextSuggestion) {
+							customRuleInput = nextSuggestion;
+							customRuleCursor = codePointLength(customRuleInput);
+						}
+					}
 				} else {
 					ruleStatus = "error";
 				}
@@ -356,7 +395,7 @@ export async function requestApproval(
 
 			const startRuleSuggestionFetch = (): void => {
 				if (ruleStatus === "loading") return;
-				if (hasCustomRuleInput()) {
+				if (hasCustomRuleInput() && !customRuleUsesSuggestion) {
 					return;
 				}
 				ruleStatus = "loading";
@@ -366,17 +405,6 @@ export async function requestApproval(
 				ruleController?.abort();
 				ruleController = new AbortController();
 				void fetchRuleSuggestions(ruleController.signal);
-			};
-
-			const advanceRuleSuggestion = (): void => {
-				if (!resolveRuleSuggestionEnabled()) return;
-				if (ruleSuggestionIndex < ruleSuggestions.length - 1) {
-					ruleSuggestionIndex += 1;
-					updateOptions();
-					tui.requestRender();
-					return;
-				}
-				startRuleSuggestionFetch();
 			};
 
 			updateTitle();
@@ -403,7 +431,6 @@ class ApprovalSelectorComponent extends Container {
 	private theme: ExtensionContext["ui"]["theme"];
 	private tui: TUI;
 	private explainKeys: KeyId[];
-	private ruleSuggestionKeys: KeyId[];
 	private ruleSuggestionEnabled: boolean;
 	private customRuleIndex?: number;
 	private customRuleCursor = 0;
@@ -412,7 +439,6 @@ class ApprovalSelectorComponent extends Container {
 	private onSelect: (index: number) => void;
 	private onCancel: () => void;
 	private onExplain?: () => void;
-	private onRuleSuggestion?: () => void;
 	private onCustomRuleKey?: (keyData: string) => boolean;
 	private title: string;
 
@@ -422,13 +448,11 @@ class ApprovalSelectorComponent extends Container {
 		theme: ExtensionContext["ui"]["theme"];
 		tui: TUI;
 		explainKeys: KeyId[];
-		ruleSuggestionKeys: KeyId[];
 		ruleSuggestionEnabled: boolean;
 		customRuleIndex?: number;
 		onSelect: (index: number) => void;
 		onCancel: () => void;
 		onExplain?: () => void;
-		onRuleSuggestion?: () => void;
 		onCustomRuleKey?: (keyData: string) => boolean;
 	}) {
 		super();
@@ -436,13 +460,11 @@ class ApprovalSelectorComponent extends Container {
 		this.theme = options.theme;
 		this.tui = options.tui;
 		this.explainKeys = options.explainKeys;
-		this.ruleSuggestionKeys = options.ruleSuggestionKeys;
 		this.ruleSuggestionEnabled = options.ruleSuggestionEnabled;
 		this.customRuleIndex = options.customRuleIndex;
 		this.onSelect = options.onSelect;
 		this.onCancel = options.onCancel;
 		this.onExplain = options.onExplain;
-		this.onRuleSuggestion = options.onRuleSuggestion;
 		this.onCustomRuleKey = options.onCustomRuleKey;
 		this.title = options.title;
 
@@ -525,15 +547,6 @@ class ApprovalSelectorComponent extends Container {
 			this.onCancel();
 			return;
 		}
-		if (
-			this.customRuleIndex === this.selectedIndex &&
-			this.ruleSuggestionEnabled &&
-			this.ruleSuggestionKeys.length > 0 &&
-			matchesKeyList(keyData, this.ruleSuggestionKeys)
-		) {
-			this.onRuleSuggestion?.();
-			return;
-		}
 		if (this.explainKeys.length > 0 && matchesKeyList(keyData, this.explainKeys)) {
 			this.onExplain?.();
 			return;
@@ -575,10 +588,8 @@ class ApprovalSelectorComponent extends Container {
 
 	private updateHints(): void {
 		const ruleHint =
-			this.ruleSuggestionEnabled &&
-			this.customRuleIndex === this.selectedIndex &&
-			this.ruleSuggestionKeys.length > 0
-				? `  ${rawKeyHint(formatKeyList(this.ruleSuggestionKeys), "next rule")}`
+			this.ruleSuggestionEnabled && this.customRuleIndex === this.selectedIndex
+				? `  ${rawKeyHint("Tab", "accept/next suggestion")}`
 				: "";
 		const explainHint =
 			this.explainKeys.length > 0
@@ -601,10 +612,12 @@ export function canCycleRuleSuggestion(
 	input: string,
 	suggestionsCount: number,
 	_touched: boolean = false,
+	usesSuggestionInput: boolean = false,
 ): boolean {
 	if (status !== "idle") return false;
-	if (input.trim().length > 0) return false;
-	return suggestionsCount > 1;
+	if (suggestionsCount === 0) return false;
+	if (input.trim().length > 0 && !usesSuggestionInput) return false;
+	return true;
 }
 
 export function buildCustomRuleOptionLabel(
