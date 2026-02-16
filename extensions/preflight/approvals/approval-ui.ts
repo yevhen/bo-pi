@@ -75,7 +75,7 @@ export async function requestApproval(
 			const hasCustomRuleInput = (): boolean => customRuleInput.trim().length > 0;
 
 			const resolveRuleSuggestion = (): string | undefined => {
-				if (customRuleTouched || hasCustomRuleInput()) return undefined;
+				if (hasCustomRuleInput()) return undefined;
 				if (ruleSuggestions.length === 0) return undefined;
 				const index = Math.min(ruleSuggestionIndex, ruleSuggestions.length - 1);
 				return ruleSuggestions[index];
@@ -114,7 +114,7 @@ export async function requestApproval(
 			const updateOptions = (): void => {
 				selector.setOptions(buildOptionLabels());
 				selector.setRuleSuggestionEnabled(resolveRuleSuggestionEnabled());
-				selector.setCustomRuleCursor(customRuleCursor, customRuleTouched);
+				selector.setCustomRuleCursor(customRuleCursor, customRuleTouched, hasCustomRuleInput());
 			};
 
 			const handleCustomRuleInput = (keyData: string): boolean => {
@@ -271,7 +271,7 @@ export async function requestApproval(
 				onRuleSuggestion: hasRuleSuggestionKeys ? () => advanceRuleSuggestion() : undefined,
 				onCustomRuleKey: (keyData) => handleCustomRuleInput(keyData),
 			});
-			selector.setCustomRuleCursor(customRuleCursor, customRuleTouched);
+			selector.setCustomRuleCursor(customRuleCursor, customRuleTouched, hasCustomRuleInput());
 
 			const updateTitle = (): void => {
 				const middleLine = resolveMiddleLine();
@@ -356,7 +356,7 @@ export async function requestApproval(
 
 			const startRuleSuggestionFetch = (): void => {
 				if (ruleStatus === "loading") return;
-				if (customRuleTouched || hasCustomRuleInput()) {
+				if (hasCustomRuleInput()) {
 					return;
 				}
 				ruleStatus = "loading";
@@ -408,6 +408,7 @@ class ApprovalSelectorComponent extends Container {
 	private customRuleIndex?: number;
 	private customRuleCursor = 0;
 	private customRuleTouched = false;
+	private customRuleHasInput = false;
 	private onSelect: (index: number) => void;
 	private onCancel: () => void;
 	private onExplain?: () => void;
@@ -485,9 +486,10 @@ class ApprovalSelectorComponent extends Container {
 		this.updateHints();
 	}
 
-	setCustomRuleCursor(cursor: number, touched: boolean): void {
+	setCustomRuleCursor(cursor: number, touched: boolean, hasInput: boolean): void {
 		this.customRuleCursor = Math.max(0, cursor);
 		this.customRuleTouched = touched;
+		this.customRuleHasInput = hasInput;
 		this.updateList();
 	}
 
@@ -500,14 +502,15 @@ class ApprovalSelectorComponent extends Container {
 
 	handleInput(keyData: string): void {
 		const kb = getEditorKeybindings();
-		if (kb.matches(keyData, "selectUp") || keyData === "k") {
+		const customRuleSelected = this.customRuleIndex === this.selectedIndex;
+		if (kb.matches(keyData, "selectUp") || (!customRuleSelected && keyData === "k")) {
 			this.selectedIndex = Math.max(0, this.selectedIndex - 1);
 			this.updateList();
 			this.updateHints();
 			this.tui.requestRender();
 			return;
 		}
-		if (kb.matches(keyData, "selectDown") || keyData === "j") {
+		if (kb.matches(keyData, "selectDown") || (!customRuleSelected && keyData === "j")) {
 			this.selectedIndex = Math.min(this.options.length - 1, this.selectedIndex + 1);
 			this.updateList();
 			this.updateHints();
@@ -564,7 +567,7 @@ class ApprovalSelectorComponent extends Container {
 	}
 
 	private renderCustomRuleOption(option: string): string {
-		const showPrefixCursor = !this.customRuleTouched;
+		const showPrefixCursor = !this.customRuleHasInput;
 		if (showPrefixCursor) {
 			return `${formatCursorCell()} ${option}`;
 		}
@@ -598,10 +601,9 @@ export function canCycleRuleSuggestion(
 	status: "idle" | "loading" | "error",
 	input: string,
 	suggestionsCount: number,
-	touched: boolean = false,
+	_touched: boolean = false,
 ): boolean {
 	if (status !== "idle") return false;
-	if (touched) return false;
 	if (input.trim().length > 0) return false;
 	return suggestionsCount > 1;
 }
@@ -618,7 +620,7 @@ export function buildCustomRuleOptionLabel(
 	if (status === "error") {
 		return formatWarningLine("Press Tab to accept suggestion or type a custom rule");
 	}
-	if (!touched && suggestion) return formatMutedLine(suggestion);
+	if (suggestion) return formatMutedLine(suggestion);
 	if (!touched) return formatMutedLine("Type a custom rule");
 	return "";
 }
