@@ -24,8 +24,13 @@ describe("custom rule approval UI helpers", () => {
 		expect(resolved).toBe("Allow only ls");
 	});
 
-	it("resolves suggestion when user confirms custom row", () => {
+	it("does not auto-accept suggestion on enter", () => {
 		const resolved = resolveCustomRule("", "Ask before running bash");
+		expect(resolved).toBeUndefined();
+	});
+
+	it("resolves suggestion only when explicitly accepted", () => {
+		const resolved = resolveCustomRule("", "Ask before running bash", { acceptSuggestion: true });
 		expect(resolved).toBe("Ask before running bash");
 	});
 });

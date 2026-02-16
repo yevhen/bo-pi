@@ -145,7 +145,9 @@ export async function requestApproval(
 					done(selected ? { action: selected.action } : { action: "deny" });
 					return;
 				}
-				const resolvedRule = resolveCustomRule(customRuleInput, resolveRuleSuggestion());
+				const resolvedRule = resolveCustomRule(customRuleInput, resolveRuleSuggestion(), {
+					acceptSuggestion: false,
+				});
 				if (!resolvedRule) {
 					ruleStatus = "error";
 					updateOptions();
@@ -487,14 +489,22 @@ export function buildCustomRuleOptionLabel(
 ): string {
 	const trimmedInput = input.trim();
 	if (trimmedInput) return trimmedInput;
-	if (suggestion) return formatMutedLine(suggestion);
 	if (status === "loading") return formatMutedLine("Fetching suggestion...");
+	if (status === "error") {
+		return formatWarningLine("Press Tab to accept suggestion or type a custom rule");
+	}
+	if (suggestion) return formatMutedLine(suggestion);
 	return formatMutedLine("Type a custom rule");
 }
 
-export function resolveCustomRule(input: string, suggestion: string | undefined): string | undefined {
+export function resolveCustomRule(
+	input: string,
+	suggestion: string | undefined,
+	options?: { acceptSuggestion?: boolean },
+): string | undefined {
 	const trimmedInput = input.trim();
 	if (trimmedInput) return trimmedInput;
+	if (!options?.acceptSuggestion) return undefined;
 	const trimmedSuggestion = suggestion?.trim();
 	return trimmedSuggestion ? trimmedSuggestion : undefined;
 }
