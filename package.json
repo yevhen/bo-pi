@@ -1,6 +1,6 @@
 {
   "name": "@yevhen.b/bo-pi",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Pi extensions for tool preflight approvals.",
   "license": "MIT",
   "repository": {
@@ -9,10 +9,14 @@
   },
   "bugs": "https://github.com/yevhen/bo-pi/issues",
   "homepage": "https://github.com/yevhen/bo-pi#readme",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "type": "module",
   "pi": {
-    "extensions": ["./extensions/preflight/index.ts"]
+    "extensions": [
+      "./extensions/preflight/index.ts"
+    ]
   },
   "peerDependencies": {
     "@mariozechner/pi-agent-core": "*",

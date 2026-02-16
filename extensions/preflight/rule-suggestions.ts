@@ -144,7 +144,8 @@ export function normalizeRuleSuggestionLine(line: string): string | undefined {
 	if (!cleaned) return undefined;
 	if (isSuggestionHeading(cleaned)) return undefined;
 
-	return normalizeSuggestionPrefix(capitalizeSuggestionSentence(cleaned));
+	const withPrefix = normalizeSuggestionPrefix(capitalizeSuggestionSentence(cleaned));
+	return withPrefix;
 }
 
 function isSuggestionHeading(value: string): boolean {
@@ -162,7 +163,7 @@ function isSuggestionHeading(value: string): boolean {
 	return false;
 }
 
-function normalizeSuggestionPrefix(value: string): string {
+function normalizeSuggestionPrefix(value: string): string | undefined {
 	if (/^allow\b/i.test(value)) {
 		return value.replace(/^allow\b/i, "Allow");
 	}
@@ -172,7 +173,19 @@ function normalizeSuggestionPrefix(value: string): string {
 	if (/^deny\b/i.test(value)) {
 		return value.replace(/^deny\b/i, "Deny");
 	}
-	return value;
+	if (/^block\b/i.test(value)) {
+		return value.replace(/^block\b/i, "Deny");
+	}
+	if (/^forbid\b/i.test(value)) {
+		return value.replace(/^forbid\b/i, "Deny");
+	}
+	if (/^require\b/i.test(value) || /^prompt\b/i.test(value)) {
+		return value.replace(/^(require|prompt)\b/i, "Ask");
+	}
+	if (/^permit\b/i.test(value)) {
+		return value.replace(/^permit\b/i, "Allow");
+	}
+	return undefined;
 }
 
 function capitalizeSuggestionSentence(value: string): string {

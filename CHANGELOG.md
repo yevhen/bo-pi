@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-02-17
+### Fixed
+- Drop invalid LLM suggestion artifacts (for example `<Function_calls>`) from the custom-rule row.
+- Normalize additional policy verbs (`block`, `forbid`, `require`, `prompt`, `permit`) to canonical `Allow`/`Ask`/`Deny` suggestions.
+- Show a muted `Type custom rule` fallback hint when no suggestion is available.
+
 ## [0.0.3] - 2026-02-14
 ### Added
 - Custom rule row in approval UI: bo-pi suggests rules, accept with Tab, cycle alternatives, or type your own.

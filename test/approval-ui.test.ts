@@ -25,6 +25,12 @@ describe("custom rule approval UI helpers", () => {
 		expect(label).toContain("Ask before running bash");
 	});
 
+	it("shows muted fallback hint when suggestion is unavailable", () => {
+		const label = buildCustomRuleOptionLabel("", undefined, "error", true);
+		expect(label).toContain("Type custom rule");
+		expect(label).toContain("\u001b[38;5;244m");
+	});
+
 	it("uses typed text over suggestion (typed override)", () => {
 		const resolved = resolveCustomRule("Allow only ls", "Ask before running bash");
 		expect(resolved).toBe("Allow only ls");

@@ -29,6 +29,11 @@ describe("rule suggestion normalization", () => {
 		);
 	});
 
+	it("drops lines without policy verb prefix", () => {
+		expect(normalizeRuleSuggestionLine("<Function_calls>")).toBeUndefined();
+		expect(normalizeRuleSuggestionLine("Tool call details")).toBeUndefined();
+	});
+
 	it("filters heading and keeps cleaned suggestions", () => {
 		const normalized = normalizeRuleSuggestions(
 			[
@@ -43,7 +48,7 @@ describe("rule suggestion normalization", () => {
 		expect(normalized).toEqual([
 			"Allow list commands",
 			"Ask before any write command",
-			"Block dangerous shell operations",
+			"Deny dangerous shell operations",
 		]);
 	});
 });

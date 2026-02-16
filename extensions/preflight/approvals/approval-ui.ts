@@ -624,17 +624,13 @@ export function buildCustomRuleOptionLabel(
 	input: string,
 	suggestion: string | undefined,
 	status: "idle" | "loading" | "error",
-	touched: boolean = false,
+	_touched: boolean = false,
 ): string {
 	const trimmedInput = input.trim();
 	if (trimmedInput) return input;
 	if (status === "loading") return formatMutedLine("Fetching suggestion...");
-	if (status === "error") {
-		return formatWarningLine("Press Tab to accept suggestion or type a custom rule");
-	}
 	if (suggestion) return formatMutedLine(suggestion);
-	if (!touched) return formatMutedLine("Type a custom rule");
-	return "";
+	return formatMutedLine("Type custom rule");
 }
 
 export function resolveCustomRule(
