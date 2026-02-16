@@ -11,12 +11,18 @@ describe("custom rule approval UI helpers", () => {
 		expect(canCycleRuleSuggestion("loading", "", 2)).toBe(false);
 		expect(canCycleRuleSuggestion("idle", "typed", 2)).toBe(false);
 		expect(canCycleRuleSuggestion("idle", "", 1)).toBe(false);
+		expect(canCycleRuleSuggestion("idle", "", 2, true)).toBe(false);
 	});
 
 	it("shows muted suggestion by default", () => {
 		const label = buildCustomRuleOptionLabel("", "Ask before running bash", "idle");
 		expect(label).toContain("Ask before running bash");
 		expect(label).toContain("\u001b[38;5;244m");
+	});
+
+	it("does not re-show suggestion after custom input was touched", () => {
+		const label = buildCustomRuleOptionLabel("", "Ask before running bash", "idle", true);
+		expect(label).toBe("");
 	});
 
 	it("uses typed text over suggestion (typed override)", () => {

@@ -63,6 +63,8 @@ export async function requestApproval(
 			let ruleStatus: "idle" | "loading" | "error" = "idle";
 			let ruleController: AbortController | undefined;
 			let customRuleInput = "";
+			let customRuleCursor = 0;
+			let customRuleTouched = false;
 			const ruleHistory: string[] = [];
 
 			const explainKeys = normalizeKeyIds(config.explainKey);
@@ -73,14 +75,19 @@ export async function requestApproval(
 			const hasCustomRuleInput = (): boolean => customRuleInput.trim().length > 0;
 
 			const resolveRuleSuggestion = (): string | undefined => {
-				if (hasCustomRuleInput()) return undefined;
+				if (customRuleTouched || hasCustomRuleInput()) return undefined;
 				if (ruleSuggestions.length === 0) return undefined;
 				const index = Math.min(ruleSuggestionIndex, ruleSuggestions.length - 1);
 				return ruleSuggestions[index];
 			};
 
 			const resolveRuleSuggestionEnabled = (): boolean => {
-				return canCycleRuleSuggestion(ruleStatus, customRuleInput, ruleSuggestions.length);
+				return canCycleRuleSuggestion(
+					ruleStatus,
+					customRuleInput,
+					ruleSuggestions.length,
+					customRuleTouched,
+				);
 			};
 
 			const resolveMiddleLine = (): string | undefined => {
@@ -93,7 +100,12 @@ export async function requestApproval(
 			const buildOptionLabels = (): string[] => {
 				return [
 					...baseOptions.map((option) => option.label),
-					buildCustomRuleOptionLabel(customRuleInput, resolveRuleSuggestion(), ruleStatus),
+					buildCustomRuleOptionLabel(
+						customRuleInput,
+						resolveRuleSuggestion(),
+						ruleStatus,
+						customRuleTouched,
+					),
 				];
 			};
 
@@ -102,6 +114,7 @@ export async function requestApproval(
 			const updateOptions = (): void => {
 				selector.setOptions(buildOptionLabels());
 				selector.setRuleSuggestionEnabled(resolveRuleSuggestionEnabled());
+				selector.setCustomRuleCursor(customRuleCursor, customRuleTouched);
 			};
 
 			const handleCustomRuleInput = (keyData: string): boolean => {
@@ -109,31 +122,117 @@ export async function requestApproval(
 				if (kb.matches(keyData, "tab")) {
 					const suggestion = resolveRuleSuggestion();
 					if (!suggestion) return false;
+					customRuleTouched = true;
 					customRuleInput = suggestion;
+					customRuleCursor = codePointLength(customRuleInput);
 					updateOptions();
 					tui.requestRender();
 					return true;
 				}
+
+				if (kb.matches(keyData, "cursorLeft")) {
+					customRuleTouched = true;
+					customRuleCursor = Math.max(0, customRuleCursor - 1);
+					updateOptions();
+					tui.requestRender();
+					return true;
+				}
+				if (kb.matches(keyData, "cursorRight")) {
+					customRuleTouched = true;
+					customRuleCursor = Math.min(codePointLength(customRuleInput), customRuleCursor + 1);
+					updateOptions();
+					tui.requestRender();
+					return true;
+				}
+				if (kb.matches(keyData, "cursorLineStart")) {
+					customRuleTouched = true;
+					customRuleCursor = 0;
+					updateOptions();
+					tui.requestRender();
+					return true;
+				}
+				if (kb.matches(keyData, "cursorLineEnd")) {
+					customRuleTouched = true;
+					customRuleCursor = codePointLength(customRuleInput);
+					updateOptions();
+					tui.requestRender();
+					return true;
+				}
+				if (kb.matches(keyData, "cursorWordLeft")) {
+					customRuleTouched = true;
+					customRuleCursor = moveWordCursorLeft(customRuleInput, customRuleCursor);
+					updateOptions();
+					tui.requestRender();
+					return true;
+				}
+				if (kb.matches(keyData, "cursorWordRight")) {
+					customRuleTouched = true;
+					customRuleCursor = moveWordCursorRight(customRuleInput, customRuleCursor);
+					updateOptions();
+					tui.requestRender();
+					return true;
+				}
+
 				if (kb.matches(keyData, "deleteCharBackward")) {
-					customRuleInput = removeLastGrapheme(customRuleInput);
+					customRuleTouched = true;
+					const next = removeCharBackward(customRuleInput, customRuleCursor);
+					customRuleInput = next.value;
+					customRuleCursor = next.cursor;
+					updateOptions();
+					tui.requestRender();
+					return true;
+				}
+				if (kb.matches(keyData, "deleteCharForward")) {
+					customRuleTouched = true;
+					const next = removeCharForward(customRuleInput, customRuleCursor);
+					customRuleInput = next.value;
+					customRuleCursor = next.cursor;
 					updateOptions();
 					tui.requestRender();
 					return true;
 				}
 				if (kb.matches(keyData, "deleteWordBackward")) {
-					customRuleInput = removeLastWord(customRuleInput);
+					customRuleTouched = true;
+					const next = removeWordBackward(customRuleInput, customRuleCursor);
+					customRuleInput = next.value;
+					customRuleCursor = next.cursor;
 					updateOptions();
 					tui.requestRender();
 					return true;
 				}
-				if (kb.matches(keyData, "deleteToLineStart") || kb.matches(keyData, "deleteToLineEnd")) {
-					customRuleInput = "";
+				if (kb.matches(keyData, "deleteWordForward")) {
+					customRuleTouched = true;
+					const next = removeWordForward(customRuleInput, customRuleCursor);
+					customRuleInput = next.value;
+					customRuleCursor = next.cursor;
 					updateOptions();
 					tui.requestRender();
 					return true;
 				}
+				if (kb.matches(keyData, "deleteToLineStart")) {
+					customRuleTouched = true;
+					const next = removeToLineStart(customRuleInput, customRuleCursor);
+					customRuleInput = next.value;
+					customRuleCursor = next.cursor;
+					updateOptions();
+					tui.requestRender();
+					return true;
+				}
+				if (kb.matches(keyData, "deleteToLineEnd")) {
+					customRuleTouched = true;
+					const next = removeToLineEnd(customRuleInput, customRuleCursor);
+					customRuleInput = next.value;
+					customRuleCursor = next.cursor;
+					updateOptions();
+					tui.requestRender();
+					return true;
+				}
+
 				if (!isPrintableInput(keyData)) return false;
-				customRuleInput += keyData;
+				customRuleTouched = true;
+				const next = insertAtCursor(customRuleInput, customRuleCursor, keyData);
+				customRuleInput = next.value;
+				customRuleCursor = next.cursor;
 				updateOptions();
 				tui.requestRender();
 				return true;
@@ -172,6 +271,7 @@ export async function requestApproval(
 				onRuleSuggestion: hasRuleSuggestionKeys ? () => advanceRuleSuggestion() : undefined,
 				onCustomRuleKey: (keyData) => handleCustomRuleInput(keyData),
 			});
+			selector.setCustomRuleCursor(customRuleCursor, customRuleTouched);
 
 			const updateTitle = (): void => {
 				const middleLine = resolveMiddleLine();
@@ -256,7 +356,7 @@ export async function requestApproval(
 
 			const startRuleSuggestionFetch = (): void => {
 				if (ruleStatus === "loading") return;
-				if (hasCustomRuleInput()) {
+				if (customRuleTouched || hasCustomRuleInput()) {
 					return;
 				}
 				ruleStatus = "loading";
@@ -306,6 +406,8 @@ class ApprovalSelectorComponent extends Container {
 	private ruleSuggestionKeys: KeyId[];
 	private ruleSuggestionEnabled: boolean;
 	private customRuleIndex?: number;
+	private customRuleCursor = 0;
+	private customRuleTouched = false;
 	private onSelect: (index: number) => void;
 	private onCancel: () => void;
 	private onExplain?: () => void;
@@ -383,6 +485,12 @@ class ApprovalSelectorComponent extends Container {
 		this.updateHints();
 	}
 
+	setCustomRuleCursor(cursor: number, touched: boolean): void {
+		this.customRuleCursor = Math.max(0, cursor);
+		this.customRuleTouched = touched;
+		this.updateList();
+	}
+
 	override invalidate(): void {
 		super.invalidate();
 		this.updateTitle();
@@ -442,11 +550,25 @@ class ApprovalSelectorComponent extends Container {
 		for (let i = 0; i < this.options.length; i++) {
 			const option = this.options[i] ?? "";
 			const isSelected = i === this.selectedIndex;
+			const isCustomRuleOption = this.customRuleIndex === i;
+			if (isSelected && isCustomRuleOption) {
+				const rendered = this.renderCustomRuleOption(option);
+				this.listContainer.addChild(new Text(this.theme.fg("accent", "→ ") + rendered, 1, 0));
+				continue;
+			}
 			const text = isSelected
 				? this.theme.fg("accent", "→ ") + this.theme.fg("accent", option)
 				: `  ${this.theme.fg("text", option)}`;
 			this.listContainer.addChild(new Text(text, 1, 0));
 		}
+	}
+
+	private renderCustomRuleOption(option: string): string {
+		const showPrefixCursor = !this.customRuleTouched;
+		if (showPrefixCursor) {
+			return `${formatCursorCell()} ${option}`;
+		}
+		return renderInputCursor(option, this.customRuleCursor);
 	}
 
 	private updateHints(): void {
@@ -476,8 +598,10 @@ export function canCycleRuleSuggestion(
 	status: "idle" | "loading" | "error",
 	input: string,
 	suggestionsCount: number,
+	touched: boolean = false,
 ): boolean {
 	if (status !== "idle") return false;
+	if (touched) return false;
 	if (input.trim().length > 0) return false;
 	return suggestionsCount > 1;
 }
@@ -486,15 +610,17 @@ export function buildCustomRuleOptionLabel(
 	input: string,
 	suggestion: string | undefined,
 	status: "idle" | "loading" | "error",
+	touched: boolean = false,
 ): string {
 	const trimmedInput = input.trim();
-	if (trimmedInput) return trimmedInput;
+	if (trimmedInput) return input;
 	if (status === "loading") return formatMutedLine("Fetching suggestion...");
 	if (status === "error") {
 		return formatWarningLine("Press Tab to accept suggestion or type a custom rule");
 	}
-	if (suggestion) return formatMutedLine(suggestion);
-	return formatMutedLine("Type a custom rule");
+	if (!touched && suggestion) return formatMutedLine(suggestion);
+	if (!touched) return formatMutedLine("Type a custom rule");
+	return "";
 }
 
 export function resolveCustomRule(
@@ -517,16 +643,116 @@ function isPrintableInput(data: string): boolean {
 	});
 }
 
-function removeLastGrapheme(value: string): string {
-	const chars = Array.from(value);
-	chars.pop();
-	return chars.join("");
+function codePointLength(value: string): number {
+	return Array.from(value).length;
 }
 
-function removeLastWord(value: string): string {
-	if (!value.trim()) return "";
-	const trimmedEnd = value.replace(/\s+$/, "");
-	return trimmedEnd.replace(/\s*\S+$/, "");
+function insertAtCursor(value: string, cursor: number, text: string): { value: string; cursor: number } {
+	const chars = Array.from(value);
+	const insert = Array.from(text);
+	const clampedCursor = Math.max(0, Math.min(cursor, chars.length));
+	const next = [...chars.slice(0, clampedCursor), ...insert, ...chars.slice(clampedCursor)];
+	return {
+		value: next.join(""),
+		cursor: clampedCursor + insert.length,
+	};
+}
+
+function removeCharBackward(value: string, cursor: number): { value: string; cursor: number } {
+	const chars = Array.from(value);
+	if (cursor <= 0 || chars.length === 0) {
+		return { value, cursor: Math.max(0, cursor) };
+	}
+	const clampedCursor = Math.max(0, Math.min(cursor, chars.length));
+	if (clampedCursor === 0) {
+		return { value, cursor: 0 };
+	}
+	const next = [...chars.slice(0, clampedCursor - 1), ...chars.slice(clampedCursor)];
+	return {
+		value: next.join(""),
+		cursor: clampedCursor - 1,
+	};
+}
+
+function removeCharForward(value: string, cursor: number): { value: string; cursor: number } {
+	const chars = Array.from(value);
+	const clampedCursor = Math.max(0, Math.min(cursor, chars.length));
+	if (clampedCursor >= chars.length) {
+		return { value, cursor: clampedCursor };
+	}
+	const next = [...chars.slice(0, clampedCursor), ...chars.slice(clampedCursor + 1)];
+	return {
+		value: next.join(""),
+		cursor: clampedCursor,
+	};
+}
+
+function removeWordBackward(value: string, cursor: number): { value: string; cursor: number } {
+	const chars = Array.from(value);
+	const clampedCursor = Math.max(0, Math.min(cursor, chars.length));
+	const before = chars.slice(0, clampedCursor).join("");
+	const after = chars.slice(clampedCursor).join("");
+	const reduced = before.replace(/\s*\S+\s*$/u, "");
+	return {
+		value: `${reduced}${after}`,
+		cursor: codePointLength(reduced),
+	};
+}
+
+function removeWordForward(value: string, cursor: number): { value: string; cursor: number } {
+	const chars = Array.from(value);
+	const clampedCursor = Math.max(0, Math.min(cursor, chars.length));
+	const before = chars.slice(0, clampedCursor).join("");
+	const after = chars.slice(clampedCursor).join("");
+	const reducedAfter = after.replace(/^\s*\S+\s*/u, "");
+	return {
+		value: `${before}${reducedAfter}`,
+		cursor: clampedCursor,
+	};
+}
+
+function removeToLineStart(value: string, cursor: number): { value: string; cursor: number } {
+	const chars = Array.from(value);
+	const clampedCursor = Math.max(0, Math.min(cursor, chars.length));
+	const after = chars.slice(clampedCursor).join("");
+	return { value: after, cursor: 0 };
+}
+
+function removeToLineEnd(value: string, cursor: number): { value: string; cursor: number } {
+	const chars = Array.from(value);
+	const clampedCursor = Math.max(0, Math.min(cursor, chars.length));
+	const before = chars.slice(0, clampedCursor).join("");
+	return { value: before, cursor: clampedCursor };
+}
+
+function moveWordCursorLeft(value: string, cursor: number): number {
+	const chars = Array.from(value);
+	const clampedCursor = Math.max(0, Math.min(cursor, chars.length));
+	const before = chars.slice(0, clampedCursor).join("");
+	const reduced = before.replace(/\s+$/u, "").replace(/\S+$/u, "");
+	return codePointLength(reduced);
+}
+
+function moveWordCursorRight(value: string, cursor: number): number {
+	const chars = Array.from(value);
+	const clampedCursor = Math.max(0, Math.min(cursor, chars.length));
+	const after = chars.slice(clampedCursor).join("");
+	const match = after.match(/^\s*\S+\s*/u);
+	if (!match || !match[0]) return clampedCursor;
+	return clampedCursor + codePointLength(match[0]);
+}
+
+function renderInputCursor(value: string, cursor: number): string {
+	const chars = Array.from(value);
+	const clampedCursor = Math.max(0, Math.min(cursor, chars.length));
+	const before = chars.slice(0, clampedCursor).join("");
+	const at = chars[clampedCursor] ?? " ";
+	const after = chars.slice(clampedCursor + (chars[clampedCursor] ? 1 : 0)).join("");
+	return `${before}${formatCursorCell(at)}${after}`;
+}
+
+function formatCursorCell(value: string = " "): string {
+	return `\u001b[7m${value}\u001b[27m`;
 }
 
 function buildApprovalTitle(
