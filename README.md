@@ -35,15 +35,17 @@ pi -e npm:@yevhen.b/bo-pi
 
 ## Highlights
 
-- Single LLM preflight call returns both intrinsic metadata and policy decision per tool call.
-- Deterministic-first decision order: `permissions deny > ask > allow`, then policy, then fallback mode.
-- LLM-generated summaries/destructive flags for approvals.
-- Explain mode with full context or last N messages.
-- Inline custom rule flow in approval UI with immediate re-check for the current call.
-- Tool-scoped policy rules (`preflight.llmRules.<tool>[]`) with legacy format migration.
-- Session overrides vs default settings, plus per-purpose model selection.
+- Every tool call gets a human-readable summary and a destructive/safe label before you decide.
+- Three approval modes: ask for everything, ask only for destructive actions, or turn it off entirely.
+- Write permission rules in plain language — bo-pi checks them with the LLM on every call.
+- Not sure what a tool call does? Press `Ctrl+E` for a detailed explanation with risk assessment.
+- bo-pi suggests rules for you — accept with `Tab`, cycle through alternatives, or type your own.
+- Permanent rules are saved per workspace or globally; session overrides reset when the session ends.
+- Use different models for classification and policy evaluation if you want.
 
-## Approval UI example
+## Approval UI
+
+When a tool call needs your approval, bo-pi shows an inline prompt:
 
 ```
 Agent wants to:
@@ -57,20 +59,25 @@ Scope: scripts/
   Ask before running shell commands in hidden/system directories
 ```
 
-On the 4th row:
-- `Tab` accepts the suggestion.
-- `Tab` again cycles to the next suggestion.
-- typing enters your own rule.
-- `Enter` saves the selected/typed rule and re-evaluates the current tool call.
+The first three options work as you'd expect. The 4th row is a rule suggestion from the model, shown in muted text. You can:
+
+- press `Tab` to accept it,
+- press `Tab` again to see the next suggestion,
+- start typing to write your own rule instead,
+- press `Enter` to save the rule.
+
+When you save a rule, bo-pi immediately re-checks the current tool call against it. If the rule allows the call, it proceeds. If it blocks, the call is denied. If the rule says "ask", you'll see the approval prompt again with updated context.
+
+Press `Ctrl+E` (configurable) in the approval prompt to get a detailed explanation: what the tool call does, why it's needed, and a risk assessment.
 
 ## Config files
 
 - Persistent settings: `~/.pi/agent/extensions/bo-pi/preflight.json`
 - Workspace rules: `.pi/preflight/settings.local.json`
 - Global rules: `~/.pi/preflight/settings.json`
-- Workspace debug log: `.pi/preflight/logs/preflight-debug.log`
+- Debug log: `.pi/preflight/logs/preflight-debug.log` (in workspace)
 
-Session overrides are stored in session history and take precedence over defaults.
+"Always (this workspace)" saves an allow rule in the workspace file. Session overrides are stored in session history and reset when the session ends.
 
 ## Permission rules (workspace/global)
 
@@ -98,7 +105,7 @@ Matching behavior:
 
 ## Policy rules
 
-Canonical storage is tool-scoped under `preflight.llmRules`:
+Policy rules are written in plain language and grouped by tool:
 
 ```json
 {
@@ -116,11 +123,13 @@ Canonical storage is tool-scoped under `preflight.llmRules`:
 }
 ```
 
-Legacy formats (`string[]`, `[{pattern, policy}]`) are still read and migrated on write.
+You can write these by hand or let bo-pi create them through the approval UI (4th row).
 
-Policy overrides live under `preflight.policyOverrides` and are written when policy blocks are explicitly overridden.
+Legacy formats (`string[]`, `[{pattern, policy}]`) are still read and migrated automatically.
+
+Policy overrides (`preflight.policyOverrides`) are saved when you explicitly allow a call that policy blocked.
 
 ## Docs
 
-- [Preflight guide/spec](docs/preflight.md)
+- [Preflight spec](docs/preflight.md)
 - [Releasing](RELEASING.md)
