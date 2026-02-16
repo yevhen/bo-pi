@@ -4,3 +4,4 @@ npm-debug.log*
 .yarn*
 .pnpm-debug.log*
 .idea
+/.pi/preflight/logs/preflight-debug.log

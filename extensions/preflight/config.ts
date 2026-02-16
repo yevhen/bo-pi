@@ -12,6 +12,7 @@ export const SESSION_ENTRY_TYPE = "bo-pi-config";
 export const DEFAULT_CONFIG: PreflightConfig = {
 	contextMessages: 1,
 	explainKey: "ctrl+e",
+	ruleSuggestionKey: "ctrl+n",
 	model: "current",
 	policyModel: "current",
 	approvalMode: "all",
@@ -75,6 +76,11 @@ export function parseConfig(value: unknown): Partial<PreflightConfig> {
 	const explainKey = parseExplainKey(record.explainKey);
 	if (explainKey) {
 		config.explainKey = explainKey;
+	}
+
+	const ruleSuggestionKey = parseExplainKey(record.ruleSuggestionKey);
+	if (ruleSuggestionKey) {
+		config.ruleSuggestionKey = ruleSuggestionKey;
 	}
 
 	if (record.model === "current") {

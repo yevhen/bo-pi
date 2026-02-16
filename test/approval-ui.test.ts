@@ -1,0 +1,31 @@
+import { describe, expect, it } from "vitest";
+import {
+	buildCustomRuleOptionLabel,
+	canCycleRuleSuggestion,
+	resolveCustomRule,
+} from "../extensions/preflight/approvals/approval-ui.js";
+
+describe("custom rule approval UI helpers", () => {
+	it("enables Ctrl+N suggestion cycling only when allowed", () => {
+		expect(canCycleRuleSuggestion("idle", "", 2)).toBe(true);
+		expect(canCycleRuleSuggestion("loading", "", 2)).toBe(false);
+		expect(canCycleRuleSuggestion("idle", "typed", 2)).toBe(false);
+		expect(canCycleRuleSuggestion("idle", "", 1)).toBe(false);
+	});
+
+	it("shows muted suggestion by default", () => {
+		const label = buildCustomRuleOptionLabel("", "Ask before running bash", "idle");
+		expect(label).toContain("Ask before running bash");
+		expect(label).toContain("\u001b[38;5;244m");
+	});
+
+	it("uses typed text over suggestion (typed override)", () => {
+		const resolved = resolveCustomRule("Allow only ls", "Ask before running bash");
+		expect(resolved).toBe("Allow only ls");
+	});
+
+	it("resolves suggestion when user confirms custom row", () => {
+		const resolved = resolveCustomRule("", "Ask before running bash");
+		expect(resolved).toBe("Ask before running bash");
+	});
+});

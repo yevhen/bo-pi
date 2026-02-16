@@ -44,6 +44,9 @@ export async function buildToolCallExplanation(
 		messages: [...trimmedContext, createUserMessage(instruction)],
 	};
 
+	logDebug(`Explanation prompt:\n${instruction}`);
+	logDebug(`Explanation context messages:\n${JSON.stringify(explainContext.messages, null, 2)}`);
+
 	try {
 		const response = await streamSimple(modelWithKey.model, explainContext, {
 			apiKey: modelWithKey.apiKey,
@@ -53,7 +56,9 @@ export async function buildToolCallExplanation(
 			// Drain stream to completion.
 		}
 		const result = await response.result();
-		const text = normalizeExplanation(extractText(result.content));
+		const rawText = extractText(result.content);
+		logDebug(`Explanation raw response:\n${rawText ?? ""}`);
+		const text = normalizeExplanation(rawText);
 		if (!text) {
 			const reason = "Explanation response was empty.";
 			logDebug(`Explanation failed: ${reason}`);
