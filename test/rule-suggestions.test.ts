@@ -17,6 +17,18 @@ describe("rule suggestion normalization", () => {
 		expect(normalized).toBeUndefined();
 	});
 
+	it("normalizes policy verb casing", () => {
+		expect(normalizeRuleSuggestionLine("ALLOW read-only shell commands")).toBe(
+			"Allow read-only shell commands",
+		);
+		expect(normalizeRuleSuggestionLine("ask before any write command")).toBe(
+			"Ask before any write command",
+		);
+		expect(normalizeRuleSuggestionLine("DENY dangerous shell operations")).toBe(
+			"Deny dangerous shell operations",
+		);
+	});
+
 	it("filters heading and keeps cleaned suggestions", () => {
 		const normalized = normalizeRuleSuggestions(
 			[
