@@ -1,52 +1,76 @@
 # Preflight guide
 
-bo-pi adds a preflight/approval layer for tool calls in Pi. It generates short summaries and destructive flags with an LLM, applies permission rules, and optionally prompts you before the tool executes.
+bo-pi adds a preflight/approval layer for tool calls in Pi. It generates short summaries and destructive flags with an LLM, applies deterministic and policy rules, and optionally prompts before execution.
 
 Key features:
-- Natural-language summaries for tool calls.
-- LLM-based destructive classification for destructive-only approvals.
-- Natural-language policy rules with optional context.
-- Explain mode with a configurable context window.
-- Session-specific overrides and model selection for preflight vs policy.
+- Single preflight LLM request per tool call returning both intrinsic metadata and policy decision.
+- Deterministic permissions + natural-language policy rules.
+- Inline approval UI with custom-rule authoring.
+- Explain mode with configurable context window.
+- Session-specific overrides and separate model selection for preflight vs policy.
 
 ## Flow overview
 
 1. The agent emits a tool call.
-2. bo-pi builds a preflight prompt (tool-call only context) and requests metadata.
-3. Permission rules and policy rules are evaluated.
-4. If the decision is **ask**, bo-pi shows the inline approval UI.
-5. If allowed, the tool runs. If blocked, the tool result is replaced with a non-error “blocked by policy/user” message.
+2. bo-pi runs preflight (LLM) and gets, per tool call:
+   - intrinsic: `summary`, `destructive`, optional `scope`
+   - policy: `allow|ask|deny|none` + reason
+3. bo-pi resolves final decision in this order:
+   - deterministic permissions (`deny > ask > allow`), then
+   - policy decision, then
+   - fallback from approval mode.
+4. If final decision is **ask**, bo-pi shows inline approval UI.
+5. If allowed, tool executes.
+6. If blocked, tool result is rewritten to a non-error user message.
 
 ## Approval modes
 
 Set via `/preflight approvals`:
 
-- `all`: ask for every tool call unless a rule allows it.
-- `destructive`: ask only when preflight marks the call as destructive (LLM classification).
-- `off`: do not ask; allow unless a rule or policy denies.
+- `all`: ask for every tool call unless rules allow it.
+- `destructive`: ask only when preflight marks the call as destructive.
+- `off`: do not ask; allow unless rules/policy deny.
 
-## Approval UI example
+## Approval UI
 
-```
-Agent wants to:
-List files in the scripts/ directory
+Inline options:
 
-Scope: scripts/
+1. `Yes` (or `Allow once` when policy currently denies)
+2. `Always (this workspace)`
+3. `No` (or `Keep blocked` when policy currently denies)
+4. Custom rule row (suggestion + inline input)
 
-→ Yes
-  Always (this workspace)
-  No
-  Never (this workspace)
-```
+Custom rule row behavior:
+- muted suggestion shown by default;
+- `Tab` accepts suggestion;
+- `Tab` again cycles to next suggestion;
+- typing replaces suggestion with custom text;
+- `Enter` saves rule and immediately re-evaluates the current tool call.
+
+If the new decision is still `ask`, the approval UI opens again with updated policy context.
 
 ## Explain mode
 
-In the approval dialog, press the explain shortcut (default `ctrl+e`) to request a richer explanation. Explain uses the configured context window (`/preflight context`):
+In the approval dialog, press explain shortcut (default `ctrl+e`) for a richer explanation.
 
-- `full`: use full context.
-- `N`: use the last N messages.
+Explain output is normalized to:
+- paragraph 1: what will happen,
+- paragraph 2: why this is needed (context-based),
+- final line: `<Level> risk: <reason>`.
 
-Policy rules use the same context window when evaluating natural-language policies.
+Explain and rule suggestions use `/preflight context`:
+- `full`: full context
+- `N`: last N messages
+
+Preflight classification itself uses tool-call-only message context to reduce prompt-injection risk from prior chat history.
+
+## Preflight failure handling
+
+If preflight fails:
+- with UI: prompt `Retry / Allow / Block`
+- without UI: block by default
+
+No silent auto-allow fallback on preflight failure.
 
 ## Permission rules
 
@@ -71,7 +95,7 @@ Matching behavior:
 - **Read/Edit/Write** use gitignore-style patterns.
 - **Custom tools** use `ToolName(args:<json>)` and match arguments exactly.
 
-Path patterns are resolved relative to:
+Path pattern prefixes:
 - `./` → current workspace
 - `/` → settings file directory
 - `//` → absolute path root
@@ -79,35 +103,48 @@ Path patterns are resolved relative to:
 
 ## Policy rules (LLM)
 
-LLM policy rules live under `preflight.llmRules` and are written in natural language:
+Canonical format is tool-scoped `preflight.llmRules.<tool>[]`:
 
 ```json
 {
   "preflight": {
-    "llmRules": [
-      {
-        "pattern": "Bash(*)",
-        "policy": "Deny if the command contains rm -rf. Otherwise allow."
-      }
-    ]
+    "llmRules": {
+      "bash": [
+        "Deny commands that recursively delete files"
+      ],
+      "read": [
+        "Allow reads in docs/ and test/"
+      ]
+    }
   }
 }
 ```
 
-Policy rules can only tighten decisions (allow → ask/deny, ask → deny). If a policy denies and UI is available, bo-pi offers a one-time override and can persist it to `preflight.policyOverrides`.
+Legacy formats are still supported for reading and are migrated on write:
+- `string[]`
+- `[{ pattern, policy }]`
+
+Policy overrides are stored in `preflight.policyOverrides`.
 
 ## Session vs default settings
 
-The `/preflight` menu lets you change settings for the current session or defaults. Session overrides are stored in the session history and take precedence over defaults.
+The `/preflight` menu has separate tabs for:
+- **Session settings**
+- **Default settings**
+
+Session overrides take precedence over defaults. Use `/preflight reset-session` to clear session overrides.
 
 ## Model selection
 
-Preflight and policy evaluation can use different models. Configure them via `/preflight model` and `/preflight policy-model`.
-
-## Preflight summaries
-
-Each tool call gets a short, natural-language summary and a destructive flag used in the approval UI. This preflight metadata is generated from the tool call itself (tool-call-only context) to reduce prompt injection risks.
+Preflight and policy evaluation can use different models:
+- `/preflight model ...`
+- `/preflight policy-model ...`
 
 ## Debugging
 
-Enable debug output with `/preflight debug on`. In UI mode, debug logs are shown as notifications. In non-UI mode, they print to stdout.
+Enable debug output with `/preflight debug on`.
+
+bo-pi writes detailed traces to:
+- `.pi/preflight/logs/preflight-debug.log`
+
+Includes prompts, context slices, raw responses, parsed metadata, and final decision source (`deterministic | policy | fallback`).

@@ -27,18 +27,20 @@ pi -e npm:@yevhen.b/bo-pi
 - `/preflight` opens the interactive settings menu.
 - `/preflight status` prints active settings.
 - `/preflight approvals all|destructive|off` sets approval mode.
-- `/preflight context full|<N>` sets context for explain and policy evaluation.
+- `/preflight context full|<N>` sets context for explain and rule suggestions.
 - `/preflight model current|provider/model` sets the preflight model.
-- `/preflight policy-model current|provider/model` sets the policy model.
+- `/preflight policy-model current|provider/model` sets the policy/rule-suggestion model.
 - `/preflight debug on|off` toggles debug logs.
 - `/preflight reset-session` clears session overrides.
 
 ## Highlights
 
-- LLM-generated, natural-language summaries for every tool call.
-- LLM-based destructive classification powers destructive-only approvals (fewer prompts).
-- Natural-language policy rules (LLM) evaluated with a configurable context window.
+- Single LLM preflight call returns both intrinsic metadata and policy decision per tool call.
+- Deterministic-first decision order: `permissions deny > ask > allow`, then policy, then fallback mode.
+- LLM-generated summaries/destructive flags for approvals.
 - Explain mode with full context or last N messages.
+- Inline custom rule flow in approval UI with immediate re-check for the current call.
+- Tool-scoped policy rules (`preflight.llmRules.<tool>[]`) with legacy format migration.
 - Session overrides vs default settings, plus per-purpose model selection.
 
 ## Approval UI example
@@ -52,17 +54,23 @@ Scope: scripts/
 → Yes
   Always (this workspace)
   No
-  Never (this workspace)
+  Ask before running shell commands in hidden/system directories
 ```
+
+On the 4th row:
+- `Tab` accepts the suggestion.
+- `Tab` again cycles to the next suggestion.
+- typing enters your own rule.
+- `Enter` saves the selected/typed rule and re-evaluates the current tool call.
 
 ## Config files
 
 - Persistent settings: `~/.pi/agent/extensions/bo-pi/preflight.json`
 - Workspace rules: `.pi/preflight/settings.local.json`
 - Global rules: `~/.pi/preflight/settings.json`
+- Workspace debug log: `.pi/preflight/logs/preflight-debug.log`
 
-The UI choices “Always (this workspace)” / “Never (this workspace)” persist rules in the workspace file.
-Session overrides are stored in the session history and take precedence over defaults.
+Session overrides are stored in session history and take precedence over defaults.
 
 ## Permission rules (workspace/global)
 
@@ -90,24 +98,29 @@ Matching behavior:
 
 ## Policy rules
 
-LLM policy rules are stored under `preflight.llmRules`:
+Canonical storage is tool-scoped under `preflight.llmRules`:
 
 ```json
 {
   "preflight": {
-    "llmRules": [
-      {
-        "pattern": "Bash(*)",
-        "policy": "Deny if the command contains rm -rf. Otherwise allow."
-      }
-    ]
+    "llmRules": {
+      "bash": [
+        "Deny commands that remove files recursively",
+        "Ask before shell commands that change git history"
+      ],
+      "read": [
+        "Allow reads inside docs/ and test/"
+      ]
+    }
   }
 }
 ```
 
-Policy overrides live under `preflight.policyOverrides` and are written when you allow a policy-blocked tool call.
+Legacy formats (`string[]`, `[{pattern, policy}]`) are still read and migrated on write.
+
+Policy overrides live under `preflight.policyOverrides` and are written when policy blocks are explicitly overridden.
 
 ## Docs
 
-- [Preflight guide](docs/preflight.md)
+- [Preflight guide/spec](docs/preflight.md)
 - [Releasing](RELEASING.md)
