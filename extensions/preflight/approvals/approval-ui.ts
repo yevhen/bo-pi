@@ -614,7 +614,7 @@ export function canCycleRuleSuggestion(
 	_touched: boolean = false,
 	usesSuggestionInput: boolean = false,
 ): boolean {
-	if (status !== "idle") return false;
+	if (status === "loading") return false;
 	if (suggestionsCount === 0) return false;
 	if (input.trim().length > 0 && !usesSuggestionInput) return false;
 	return true;

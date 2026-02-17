@@ -12,6 +12,8 @@ describe("custom rule approval UI helpers", () => {
 		expect(canCycleRuleSuggestion("idle", "typed", 2)).toBe(false);
 		expect(canCycleRuleSuggestion("idle", "", 0)).toBe(false);
 		expect(canCycleRuleSuggestion("idle", "Ask before bash", 2, true, true)).toBe(true);
+		expect(canCycleRuleSuggestion("error", "", 1)).toBe(true);
+		expect(canCycleRuleSuggestion("error", "", 0)).toBe(false);
 	});
 
 	it("shows muted suggestion by default", () => {

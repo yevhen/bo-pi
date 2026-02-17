@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-02-17
+### Fixed
+- Re-enable `Tab` suggestion accept/next after empty custom-rule submission when suggestions are available.
+
 ## [0.0.4] - 2026-02-17
 ### Fixed
 - Drop invalid LLM suggestion artifacts (for example `<Function_calls>`) from the custom-rule row.
