@@ -51,11 +51,13 @@ export async function resolveToolDecisions(
 		const applicablePolicyRules = getPolicyRulesForTool(toolCall.name, permissions.policyRules);
 		const policyDecision = policyDecisions[toolCall.id];
 		if (!overrideRule && applicablePolicyRules.length > 0 && policyDecision && policyDecision.decision !== "none") {
+			const shouldPromptForPolicyDeny =
+				policyDecision.decision === "deny" && config.approvalMode !== "off" && ctx.hasUI;
 			const decision: ToolDecision = {
-				decision: policyDecision.decision,
+				decision: shouldPromptForPolicyDeny ? "ask" : policyDecision.decision,
 				source: "policy",
 				reason:
-					policyDecision.decision === "deny"
+					policyDecision.decision === "deny" && !shouldPromptForPolicyDeny
 						? buildPolicyDenyReason(policyDecision.reason)
 						: undefined,
 				policy: {

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-02-17
+### Fixed
+- Ask for confirmation in the approval UI when policy rules block a command (for example `git clone`) instead of auto-rejecting.
+
 ## [0.0.5] - 2026-02-17
 ### Fixed
 - Re-enable `Tab` suggestion accept/next after empty custom-rule submission when suggestions are available.

@@ -67,8 +67,8 @@ function buildPreflight(toolCalls: ToolCallSummary[]): Record<string, ToolPrefli
 	return result;
 }
 
-function buildCtx(): ExtensionContext {
-	return { cwd: "/workspace", hasUI: false } as ExtensionContext;
+function buildCtx(hasUI: boolean = false): ExtensionContext {
+	return { cwd: "/workspace", hasUI } as ExtensionContext;
 }
 
 describe("resolveToolDecisions", () => {
@@ -119,6 +119,54 @@ describe("resolveToolDecisions", () => {
 		expect(decisions["call-1"].source).toBe("policy");
 		expect(decisions["call-2"].decision).toBe("allow");
 		expect(decisions["call-2"].source).toBe("fallback");
+	});
+
+	it("asks for confirmation when policy denies and UI is available", async () => {
+		const toolCalls: ToolCallSummary[] = [{ id: "call-1", name: "bash", args: { command: "git clone repo" } }];
+		const decisions = await resolveToolDecisions(
+			buildEvent(toolCalls),
+			buildPreflight(toolCalls),
+			{ "call-1": buildPolicy("deny", "Only read-only bash commands are allowed") },
+			buildCtx(true),
+			{ ...baseConfig, approvalMode: "all" },
+			buildPermissions({
+				policyRules: [buildPolicyRule("bash", "Allow read-only bash commands")],
+			}),
+			() => {},
+		);
+
+		expect(decisions["call-1"]).toMatchObject({
+			decision: "ask",
+			source: "policy",
+			policy: {
+				decision: "deny",
+				reason: "Only read-only bash commands are allowed",
+			},
+		});
+	});
+
+	it("keeps policy deny when approvals are off", async () => {
+		const toolCalls: ToolCallSummary[] = [{ id: "call-1", name: "bash", args: { command: "git clone repo" } }];
+		const decisions = await resolveToolDecisions(
+			buildEvent(toolCalls),
+			buildPreflight(toolCalls),
+			{ "call-1": buildPolicy("deny", "Only read-only bash commands are allowed") },
+			buildCtx(true),
+			{ ...baseConfig, approvalMode: "off" },
+			buildPermissions({
+				policyRules: [buildPolicyRule("bash", "Allow read-only bash commands")],
+			}),
+			() => {},
+		);
+
+		expect(decisions["call-1"]).toMatchObject({
+			decision: "deny",
+			source: "policy",
+			reason: "Blocked by custom rules: Only read-only bash commands are allowed",
+			policy: {
+				decision: "deny",
+			},
+		});
 	});
 
 	it("falls back by approval mode when policy is none", async () => {
