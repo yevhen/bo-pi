@@ -1,7 +1,6 @@
 import type { ExtensionContext, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { Context } from "@mariozechner/pi-ai";
-import { formatContextLabel } from "./config.js";
 import type {
 	DebugLogger,
 	PreflightConfig,
@@ -35,12 +34,11 @@ export async function buildRuleSuggestion(
 		return { status: "error", reason };
 	}
 
-	const contextLabel = formatContextLabel(config.contextMessages);
 	logDebug(`Rule suggestion model: ${modelWithKey.model.provider}/${modelWithKey.model.id}.`);
-	logDebug(`Rule suggestion context: ${contextLabel} messages.`);
+	logDebug("Rule suggestion context: tool-call only.");
 
 	const instruction = buildRuleSuggestionPrompt(toolCall, metadata, previousSuggestions);
-	const trimmedContext = limitContextMessages(event.llmContext.messages, config.contextMessages);
+	const trimmedContext = limitContextMessages(event.llmContext.messages, 0);
 	const ruleContext: Context = {
 		...event.llmContext,
 		messages: [...trimmedContext, createUserMessage(instruction)],
