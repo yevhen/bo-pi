@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
-import type { PermissionSettingsFile, ToolCallSummary } from "../extensions/preflight/types.js";
+import type {
+	PermissionRule,
+	PermissionSettingsFile,
+	ToolCallSummary,
+} from "../extensions/preflight/types.js";
 import {
+	buildPolicyOverrides,
 	buildPolicyRules,
 	compilePermissionRule,
+	getPermissionRulePatternsForTool,
+	getPolicyOverridesForTool,
+	getPolicyRuleBucketsForTool,
 	matchesPermissionRule,
 } from "../extensions/preflight/permissions/matching.js";
 
@@ -131,5 +139,65 @@ describe("policy rule loading", () => {
 		expect(rules.map((rule) => ({ tool: rule.tool, policy: rule.policy }))).toEqual([
 			{ tool: "*", policy: "Ask before destructive changes" },
 		]);
+	});
+});
+
+describe("rule context selectors", () => {
+	it("splits global and tool-specific policy buckets", () => {
+		const rules = buildPolicyRules(
+			{
+				preflight: {
+					llmRules: {
+						"*": ["Rule Global"],
+						bash: ["Rule Bash"],
+					},
+				},
+			},
+			"workspace",
+			"/workspace/.pi/preflight/settings.local.json",
+			logDebug,
+		);
+
+		const buckets = getPolicyRuleBucketsForTool("bash", rules);
+		expect(buckets).toEqual({
+			global: ["Rule Global"],
+			tool: ["Rule Bash"],
+		});
+	});
+
+	it("collects deterministic and override rules for the current tool including wildcard", () => {
+		const allowRule = compilePermissionRule(
+			"Bash(ls:*)",
+			"allow",
+			"workspace",
+			"/workspace/.pi/preflight/settings.local.json",
+			logDebug,
+		);
+		const wildcardRule = compilePermissionRule(
+			"*",
+			"allow",
+			"workspace",
+			"/workspace/.pi/preflight/settings.local.json",
+			logDebug,
+		);
+		const overrides = buildPolicyOverrides(
+			{
+				preflight: {
+					policyOverrides: ["Bash(git push*)", "*"],
+				},
+			},
+			"workspace",
+			"/workspace/.pi/preflight/settings.local.json",
+			logDebug,
+		);
+
+		const deterministicRules = [allowRule, wildcardRule].filter(
+			(rule): rule is PermissionRule => Boolean(rule),
+		);
+		const patterns = getPermissionRulePatternsForTool("bash", deterministicRules);
+		const selectedOverrides = getPolicyOverridesForTool("bash", overrides);
+
+		expect(patterns).toEqual(["Bash(ls:*)", "*"]);
+		expect(selectedOverrides).toEqual(["Bash(git push*)", "*"]);
 	});
 });

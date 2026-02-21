@@ -86,6 +86,20 @@ export interface PermissionsState {
 	policyOverrides: PolicyOverrideRule[];
 }
 
+export interface RuleContextSnapshot {
+	tool: string;
+	policy: {
+		global: string[];
+		tool: string[];
+	};
+	permissions: {
+		allow: string[];
+		ask: string[];
+		deny: string[];
+	};
+	policyOverrides: string[];
+}
+
 export interface PolicyEvaluation {
 	decision: PermissionDecision;
 	reason?: string;
@@ -120,6 +134,14 @@ export type ExplanationAttempt =
 export type RuleSuggestionAttempt =
 	| { status: "ok"; suggestions: string[] }
 	| { status: "error"; reason: string };
+
+export interface RuleConsistencyResult {
+	conflict: boolean;
+	reason: string;
+	conflictsWith: string[];
+}
+
+export type RuleConflictAction = "edit-rule" | "save-anyway" | "cancel";
 
 export type PreflightFailureDecision =
 	| { action: "retry" }

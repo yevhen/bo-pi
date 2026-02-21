@@ -49,6 +49,25 @@ Custom rule row behavior:
 
 If the new decision is still `ask`, the approval UI opens again with updated policy context.
 
+### Rule conflict detection
+
+Before saving a custom rule, bo-pi checks it against existing rules for conflicts (duplicates, contradictions). If a conflict is detected, a dialog appears:
+
+- **Edit rule** (default): go back and revise the rule.
+- **Save anyway**: persist despite the conflict.
+- **Cancel**: discard the rule and block the current call.
+
+Conflict detection uses an LLM call with the full rule context (policy rules, deterministic permissions, policy overrides). If the consistency check fails or the model is unavailable, the rule is saved without blocking — conflict detection is warning-based, never a hard gate.
+
+### Rule suggestion context
+
+Suggestions are generated with awareness of your existing rules:
+- global and tool-specific policy rules (`preflight.llmRules`)
+- deterministic permissions (`permissions.allow|ask|deny`)
+- policy overrides (`preflight.policyOverrides`)
+
+This prevents the model from suggesting rules that duplicate or contradict what you already have. Suggestions are also post-filtered on the client side: near-exact duplicates (after normalizing case, whitespace, and trailing punctuation) are removed.
+
 ## Explain mode
 
 In the approval dialog, press explain shortcut (default `ctrl+e`) for a richer explanation.

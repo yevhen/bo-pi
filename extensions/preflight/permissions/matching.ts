@@ -100,6 +100,69 @@ export function getPolicyRulesForTool(toolName: string, rules: PolicyRule[]): st
 	return policies;
 }
 
+export function getPolicyRuleBucketsForTool(
+	toolName: string,
+	rules: PolicyRule[],
+): { global: string[]; tool: string[] } {
+	const normalizedTool = normalizeToolName(toolName);
+	const global: string[] = [];
+	const tool: string[] = [];
+	const globalSeen = new Set<string>();
+	const toolSeen = new Set<string>();
+
+	for (const rule of rules) {
+		if (rule.tool === "*") {
+			if (globalSeen.has(rule.policy)) continue;
+			globalSeen.add(rule.policy);
+			global.push(rule.policy);
+			continue;
+		}
+		if (rule.tool !== normalizedTool) continue;
+		if (toolSeen.has(rule.policy)) continue;
+		toolSeen.add(rule.policy);
+		tool.push(rule.policy);
+	}
+
+	return { global, tool };
+}
+
+export function getPermissionRulePatternsForTool(
+	toolName: string,
+	rules: PermissionRule[],
+): string[] {
+	const normalizedTool = normalizeToolName(toolName);
+	const seen = new Set<string>();
+	const patterns: string[] = [];
+
+	for (const rule of rules) {
+		if (!matchesRuleTool(rule.tool, normalizedTool)) continue;
+		if (seen.has(rule.raw)) continue;
+		seen.add(rule.raw);
+		patterns.push(rule.raw);
+	}
+
+	return patterns;
+}
+
+export function getPolicyOverridesForTool(toolName: string, rules: PolicyOverrideRule[]): string[] {
+	const normalizedTool = normalizeToolName(toolName);
+	const seen = new Set<string>();
+	const overrides: string[] = [];
+
+	for (const rule of rules) {
+		if (!matchesRuleTool(rule.tool, normalizedTool)) continue;
+		if (seen.has(rule.raw)) continue;
+		seen.add(rule.raw);
+		overrides.push(rule.raw);
+	}
+
+	return overrides;
+}
+
+function matchesRuleTool(ruleTool: string, normalizedTool: string): boolean {
+	return ruleTool === "*" || ruleTool === normalizedTool;
+}
+
 function extractPolicyEntries(
 	value: unknown,
 	logDebug: DebugLogger,
