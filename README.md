@@ -40,6 +40,7 @@ pi -e npm:@yevhen.b/bo-pi
 - Write permission rules in plain language — bo-pi checks them with the LLM on every call.
 - Not sure what a tool call does? Press `Ctrl+E` for a detailed explanation with risk assessment.
 - bo-pi suggests rules for you — accept with `Tab`, cycle through alternatives, or type your own.
+- Suggestions are aware of your existing rules and avoid duplicates or conflicts.
 - Permanent rules are saved per workspace or globally; session overrides reset when the session ends.
 - Use different models for classification and policy evaluation if you want.
 
@@ -66,7 +67,25 @@ The first three options work as you'd expect. The 4th row is a rule suggestion f
 - start typing to write your own rule instead,
 - press `Enter` to save the rule.
 
-When you save a rule, bo-pi immediately re-checks the current tool call against it. If the rule allows the call, it proceeds. If it blocks, the call is denied. If the rule says "ask", you'll see the approval prompt again with updated context.
+When you save a rule, bo-pi checks it for conflicts with your existing rules first. If a conflict is detected, you'll see a dialog:
+
+```
+⚠ Rule conflict
+
+New rule:  Deny bash commands that only echo static strings
+Conflicts: Allow bash commands that only echo static strings
+Reason:    Candidate rule contradicts an existing allow rule
+
+→ Edit rule
+  Save anyway
+  Cancel
+```
+
+- **Edit rule** (default): go back and change the rule text.
+- **Save anyway**: persist the rule despite the conflict.
+- **Cancel**: discard the rule and block the current call.
+
+If no conflict is found, the rule is saved and bo-pi immediately re-checks the current tool call against it. If the rule allows the call, it proceeds. If it blocks, the call is denied. If the rule says "ask", you'll see the approval prompt again with updated context.
 
 Press `Ctrl+E` (configurable) in the approval prompt to get a detailed explanation: what the tool call does, why it's needed, and a risk assessment.
 

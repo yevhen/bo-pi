@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.0.7] - 2026-02-21
+### Added
+- Warn on conflicting custom rules before save, with options to edit (default), save anyway, or cancel.
+- Rule consistency evaluator for candidate custom rules with non-blocking fallback when checks fail.
+
+### Changed
+- Rule suggestions now include existing policy + deterministic permission context (including wildcard/global rules).
+- Rule suggestion filtering now removes near-duplicates against existing policy rules.
+
 ## [0.0.6] - 2026-02-17
 ### Fixed
 - Ask for confirmation in the approval UI when policy rules block a command (for example `git clone`) instead of auto-rejecting.

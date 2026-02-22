@@ -11,7 +11,9 @@ import { resolveToolDecisions } from "../permissions/decisions.js";
 import { getPolicyRulesForTool } from "../permissions/matching.js";
 import { persistPolicyOverride, persistPolicyRule, persistWorkspaceRule } from "../permissions/persistence.js";
 import { loadPermissionsState } from "../permissions/state.js";
-import { requestApproval } from "./approval-ui.js";
+import { buildRuleContextSnapshot } from "../rule-context.js";
+import { evaluateRuleConsistency } from "../rule-consistency.js";
+import { requestApproval, requestRuleConflictAction } from "./approval-ui.js";
 
 export async function collectApprovals(
 	event: ToolCallsContext,
@@ -70,11 +72,14 @@ export async function collectApprovals(
 		let currentMetadata = preflight[toolCall.id];
 
 		while (true) {
+			const permissions = loadPermissionsState(ctx.cwd, logDebug);
+			const existingRules = buildRuleContextSnapshot(toolCall.name, permissions);
 			const approvalDecision = await requestApproval(
 				event,
 				toolCall,
 				currentMetadata,
 				currentDecision,
+				existingRules,
 				ctx,
 				config,
 				logDebug,
@@ -102,6 +107,35 @@ export async function collectApprovals(
 			if (approvalDecision.action === "deny") {
 				approvals[toolCall.id] = { allow: false, reason: "Blocked by user" };
 				break;
+			}
+
+			const consistency = await evaluateRuleConsistency(
+				event,
+				toolCall,
+				approvalDecision.rule,
+				existingRules,
+				ctx,
+				config,
+				logDebug,
+			);
+			logDebug(
+				`Rule consistency for ${toolCall.name}: conflict=${consistency.conflict}, reason=${consistency.reason}`,
+			);
+			if (consistency.conflict) {
+				const conflictAction = await requestRuleConflictAction(
+					toolCall,
+					approvalDecision.rule,
+					consistency,
+					ctx,
+				);
+				logDebug(`Rule conflict action for ${toolCall.name}: ${conflictAction}.`);
+				if (conflictAction === "edit-rule") {
+					continue;
+				}
+				if (conflictAction === "cancel") {
+					approvals[toolCall.id] = { allow: false, reason: "Blocked by user" };
+					break;
+				}
 			}
 
 			persistPolicyRule(toolCall, approvalDecision.rule, ctx, logDebug);

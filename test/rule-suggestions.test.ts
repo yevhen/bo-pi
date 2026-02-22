@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	canonicalizeRuleText,
 	normalizeRuleSuggestionLine,
 	normalizeRuleSuggestions,
 } from "../extensions/preflight/rule-suggestions.js";
@@ -50,5 +51,23 @@ describe("rule suggestion normalization", () => {
 			"Ask before any write command",
 			"Deny dangerous shell operations",
 		]);
+	});
+
+	it("filters near-exact duplicates from existing rules", () => {
+		const normalized = normalizeRuleSuggestions(
+			[
+				"Allow list commands",
+				"Ask before writes",
+				"Deny recursive delete commands",
+			].join("\n"),
+			[],
+			["  allow   list commands.", "ask before writes"],
+		);
+
+		expect(normalized).toEqual(["Deny recursive delete commands"]);
+	});
+
+	it("canonicalizes whitespace and trailing punctuation", () => {
+		expect(canonicalizeRuleText("  Ask   before writes. ")).toBe("ask before writes");
 	});
 });

@@ -5,3 +5,4 @@ npm-debug.log*
 .pnpm-debug.log*
 .idea
 /.pi/preflight/logs/preflight-debug.log
+/.pi/todos/

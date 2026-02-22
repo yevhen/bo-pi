@@ -16,6 +16,9 @@ import type {
 	ApprovalDecision,
 	DebugLogger,
 	PreflightConfig,
+	RuleConflictAction,
+	RuleConsistencyResult,
+	RuleContextSnapshot,
 	ToolCallSummary,
 	ToolCallsContext,
 	ToolDecision,
@@ -32,6 +35,7 @@ export async function requestApproval(
 	toolCall: ToolCallSummary,
 	metadata: ToolPreflightMetadata | undefined,
 	decision: ToolDecision | undefined,
+	existingRules: RuleContextSnapshot,
 	ctx: ExtensionContext,
 	config: PreflightConfig,
 	logDebug: DebugLogger,
@@ -370,6 +374,7 @@ export async function requestApproval(
 					ctx,
 					config,
 					logDebug,
+					existingRules,
 					ruleHistory,
 					signal,
 				);
@@ -420,6 +425,63 @@ export async function requestApproval(
 		const allow = await ctx.ui.confirm(titleLine, fallbackMessage);
 		return allow ? { action: "allow" } : { action: "deny" };
 	}
+}
+
+export async function requestRuleConflictAction(
+	toolCall: ToolCallSummary,
+	candidateRule: string,
+	consistency: RuleConsistencyResult,
+	ctx: ExtensionContext,
+): Promise<RuleConflictAction> {
+	if (!ctx.hasUI) {
+		return "save-anyway";
+	}
+
+	const title = buildConflictTitle(candidateRule, consistency);
+
+	const selection = await ctx.ui.select(title, [
+		"Edit rule",
+		"Save anyway",
+		"Cancel",
+	]);
+
+	if (!selection || selection.startsWith("Edit")) {
+		return "edit-rule";
+	}
+	if (selection.startsWith("Save")) {
+		return "save-anyway";
+	}
+	return "cancel";
+}
+
+function buildConflictTitle(
+	candidateRule: string,
+	consistency: RuleConsistencyResult,
+): string {
+	const lines: string[] = [
+		`${ANSI_SCOPE_WARNING}⚠ Rule conflict${ANSI_RESET}`,
+		"",
+		`${ANSI_MUTED}New rule:${ANSI_RESET}  ${candidateRule}`,
+	];
+
+	if (consistency.conflictsWith.length > 0) {
+		lines.push(
+			`${ANSI_MUTED}Conflicts:${ANSI_RESET} ${consistency.conflictsWith.join(", ")}`,
+		);
+	}
+
+	if (consistency.reason.trim()) {
+		const short = truncateReason(consistency.reason, 120);
+		lines.push(`${ANSI_MUTED}Reason:${ANSI_RESET}    ${short}`);
+	}
+
+	return lines.join("\n");
+}
+
+function truncateReason(reason: string, maxLength: number): string {
+	const oneLine = reason.replace(/\s+/g, " ").trim();
+	if (oneLine.length <= maxLength) return oneLine;
+	return `${oneLine.slice(0, maxLength - 1)}…`;
 }
 
 class ApprovalSelectorComponent extends Container {

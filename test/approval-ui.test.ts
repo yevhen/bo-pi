@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
 	buildCustomRuleOptionLabel,
 	canCycleRuleSuggestion,
+	requestRuleConflictAction,
 	resolveCustomRule,
 } from "../extensions/preflight/approvals/approval-ui.js";
 
@@ -46,5 +48,26 @@ describe("custom rule approval UI helpers", () => {
 	it("resolves suggestion only when explicitly accepted", () => {
 		const resolved = resolveCustomRule("", "Ask before running bash", { acceptSuggestion: true });
 		expect(resolved).toBe("Ask before running bash");
+	});
+});
+
+describe("rule conflict action", () => {
+	it("defaults to edit rule when user dismisses dialog", async () => {
+		const ctx = {
+			hasUI: true,
+			ui: {
+				notify: vi.fn(),
+				select: vi.fn().mockResolvedValue(undefined),
+			},
+		} as unknown as ExtensionContext;
+
+		const action = await requestRuleConflictAction(
+			{ id: "call-1", name: "bash", args: { command: "ls" } },
+			"Allow list commands",
+			{ conflict: true, reason: "Conflicts with deny", conflictsWith: ["Deny shell commands"] },
+			ctx,
+		);
+
+		expect(action).toBe("edit-rule");
 	});
 });

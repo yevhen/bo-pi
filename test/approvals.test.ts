@@ -3,13 +3,18 @@ import type { ExtensionContext, ToolPreflightMetadata } from "@mariozechner/pi-c
 import type { Context } from "@mariozechner/pi-ai";
 import type { PreflightConfig, ToolCallsContext, ToolDecision } from "../extensions/preflight/types.js";
 import { collectApprovals } from "../extensions/preflight/approvals/index.js";
-import { requestApproval } from "../extensions/preflight/approvals/approval-ui.js";
+import {
+	requestApproval,
+	requestRuleConflictAction,
+} from "../extensions/preflight/approvals/approval-ui.js";
 import { persistPolicyRule } from "../extensions/preflight/permissions/persistence.js";
 import { buildPreflightMetadata } from "../extensions/preflight/preflight.js";
+import { evaluateRuleConsistency } from "../extensions/preflight/rule-consistency.js";
 import { resolveToolDecisions } from "../extensions/preflight/permissions/decisions.js";
 
 vi.mock("../extensions/preflight/approvals/approval-ui.js", () => ({
 	requestApproval: vi.fn(),
+	requestRuleConflictAction: vi.fn(),
 }));
 
 vi.mock("../extensions/preflight/permissions/persistence.js", () => ({
@@ -26,9 +31,15 @@ vi.mock("../extensions/preflight/permissions/state.js", () => ({
 	})),
 }));
 
-vi.mock("../extensions/preflight/permissions/matching.js", () => ({
-	getPolicyRulesForTool: vi.fn(() => ["test rule"]),
-}));
+vi.mock("../extensions/preflight/permissions/matching.js", async () => {
+	const actual = await vi.importActual<typeof import("../extensions/preflight/permissions/matching.js")>(
+		"../extensions/preflight/permissions/matching.js",
+	);
+	return {
+		...actual,
+		getPolicyRulesForTool: vi.fn(() => ["test rule"]),
+	};
+});
 
 vi.mock("../extensions/preflight/preflight.js", () => ({
 	buildPreflightMetadata: vi.fn(),
@@ -36,6 +47,10 @@ vi.mock("../extensions/preflight/preflight.js", () => ({
 
 vi.mock("../extensions/preflight/permissions/decisions.js", () => ({
 	resolveToolDecisions: vi.fn(),
+}));
+
+vi.mock("../extensions/preflight/rule-consistency.js", () => ({
+	evaluateRuleConsistency: vi.fn(),
 }));
 
 const logDebug = () => {};
@@ -87,15 +102,24 @@ function createCtx(): ExtensionContext {
 
 describe("collectApprovals custom rule behavior", () => {
 	const approvalMock = vi.mocked(requestApproval);
+	const conflictActionMock = vi.mocked(requestRuleConflictAction);
+	const consistencyMock = vi.mocked(evaluateRuleConsistency);
 	const persistPolicyRuleMock = vi.mocked(persistPolicyRule);
 	const preflightMock = vi.mocked(buildPreflightMetadata);
 	const decisionsMock = vi.mocked(resolveToolDecisions);
 
 	beforeEach(() => {
 		approvalMock.mockReset();
+		conflictActionMock.mockReset();
+		consistencyMock.mockReset();
 		persistPolicyRuleMock.mockReset();
 		preflightMock.mockReset();
 		decisionsMock.mockReset();
+		consistencyMock.mockResolvedValue({
+			conflict: false,
+			reason: "No conflict detected.",
+			conflictsWith: [],
+		});
 	});
 
 	it("does not auto-allow when custom rule evaluates to deny", async () => {
@@ -134,6 +158,94 @@ describe("collectApprovals custom rule behavior", () => {
 			allow: false,
 			reason: "Blocked by custom rules: Rule denies this command",
 		});
+	});
+
+	it("loops back to editor when conflict action is edit rule", async () => {
+		approvalMock
+			.mockResolvedValueOnce({ action: "custom-rule", rule: "Allow list commands" })
+			.mockResolvedValueOnce({ action: "allow" });
+		consistencyMock.mockResolvedValue({
+			conflict: true,
+			reason: "Conflicts with existing deny rule.",
+			conflictsWith: ["Deny all shell commands"],
+		});
+		conflictActionMock.mockResolvedValue("edit-rule");
+
+		const approvals = await collectApprovals(
+			buildEvent(),
+			buildMetadata(),
+			buildAskDecision(),
+			createCtx(),
+			config,
+			logDebug,
+		);
+
+		expect(approvalMock).toHaveBeenCalledTimes(2);
+		expect(persistPolicyRuleMock).not.toHaveBeenCalled();
+		expect(approvals?.["call-1"]).toEqual({ allow: true });
+	});
+
+	it("saves conflicting rule when user chooses save anyway", async () => {
+		approvalMock.mockResolvedValue({ action: "custom-rule", rule: "Allow list commands" });
+		consistencyMock.mockResolvedValue({
+			conflict: true,
+			reason: "Conflicts with existing ask rule.",
+			conflictsWith: ["Ask before any shell command"],
+		});
+		conflictActionMock.mockResolvedValue("save-anyway");
+		preflightMock.mockResolvedValue({
+			status: "ok",
+			metadata: buildMetadata(),
+			policyDecisions: {
+				"call-1": { decision: "allow", reason: "Rule allows list commands" },
+			},
+		});
+		decisionsMock.mockResolvedValue({
+			"call-1": {
+				decision: "allow",
+				source: "policy",
+				policy: {
+					decision: "allow",
+					reason: "Rule allows list commands",
+					rules: ["Allow list commands"],
+				},
+			},
+		});
+
+		const approvals = await collectApprovals(
+			buildEvent(),
+			buildMetadata(),
+			buildAskDecision(),
+			createCtx(),
+			config,
+			logDebug,
+		);
+
+		expect(persistPolicyRuleMock).toHaveBeenCalledOnce();
+		expect(approvals?.["call-1"]).toEqual({ allow: true });
+	});
+
+	it("cancels approval when conflicting rule is canceled", async () => {
+		approvalMock.mockResolvedValue({ action: "custom-rule", rule: "Allow list commands" });
+		consistencyMock.mockResolvedValue({
+			conflict: true,
+			reason: "Conflicts with existing deny rule.",
+			conflictsWith: ["Deny shell writes"],
+		});
+		conflictActionMock.mockResolvedValue("cancel");
+
+		const approvals = await collectApprovals(
+			buildEvent(),
+			buildMetadata(),
+			buildAskDecision(),
+			createCtx(),
+			config,
+			logDebug,
+		);
+
+		expect(persistPolicyRuleMock).not.toHaveBeenCalled();
+		expect(preflightMock).not.toHaveBeenCalled();
+		expect(approvals?.["call-1"]).toEqual({ allow: false, reason: "Blocked by user" });
 	});
 
 	it("allows current call when custom rule evaluates to allow", async () => {
