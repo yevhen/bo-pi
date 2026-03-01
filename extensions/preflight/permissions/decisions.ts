@@ -30,7 +30,7 @@ export async function resolveToolDecisions(
 
 	for (const toolCall of event.toolCalls) {
 		const metadata = preflight[toolCall.id];
-		const deterministic = resolveDeterministicDecision(toolCall, ctx.cwd, permissions, logDebug);
+		const deterministic = resolveDeterministicDecisionForToolCall(toolCall, ctx.cwd, permissions, logDebug);
 		if (deterministic) {
 			const decision: ToolDecision = {
 				decision: deterministic.decision,
@@ -83,7 +83,7 @@ export async function resolveToolDecisions(
 	return decisions;
 }
 
-function resolveDeterministicDecision(
+export function resolveDeterministicDecisionForToolCall(
 	toolCall: ToolCallSummary,
 	cwd: string,
 	permissions: PermissionsState,

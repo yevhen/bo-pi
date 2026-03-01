@@ -9,7 +9,10 @@ import type {
 	ToolCallsContext,
 	ToolPolicyDecision,
 } from "../extensions/preflight/types.js";
-import { resolveToolDecisions } from "../extensions/preflight/permissions/decisions.js";
+import {
+	resolveDeterministicDecisionForToolCall,
+	resolveToolDecisions,
+} from "../extensions/preflight/permissions/decisions.js";
 import { compilePermissionRule } from "../extensions/preflight/permissions/matching.js";
 
 const logLines: string[] = [];
@@ -72,6 +75,49 @@ function buildCtx(hasUI: boolean = false): ExtensionContext {
 }
 
 describe("resolveToolDecisions", () => {
+	it("exposes deterministic decision helper for deny/allow short-circuiting", () => {
+		const denyRule = compilePermissionRule(
+			"Bash(rm -rf *)",
+			"deny",
+			"workspace",
+			"/workspace/.pi/preflight/settings.local.json",
+			() => {},
+		);
+		const allowRule = compilePermissionRule(
+			"Read(./docs/**)",
+			"allow",
+			"workspace",
+			"/workspace/.pi/preflight/settings.local.json",
+			() => {},
+		);
+		const denyToolCall: ToolCallSummary = {
+			id: "call-1",
+			name: "bash",
+			args: { command: "rm -rf node_modules" },
+		};
+		const allowToolCall: ToolCallSummary = {
+			id: "call-2",
+			name: "read",
+			args: { path: "./docs/preflight.md" },
+		};
+
+		const denyDecision = resolveDeterministicDecisionForToolCall(
+			denyToolCall,
+			"/workspace",
+			buildPermissions({ rules: { allow: [], ask: [], deny: denyRule ? [denyRule] : [] } }),
+			() => {},
+		);
+		const allowDecision = resolveDeterministicDecisionForToolCall(
+			allowToolCall,
+			"/workspace",
+			buildPermissions({ rules: { allow: allowRule ? [allowRule] : [], ask: [], deny: [] } }),
+			() => {},
+		);
+
+		expect(denyDecision?.decision).toBe("deny");
+		expect(allowDecision?.decision).toBe("allow");
+	});
+
 	it("keeps deterministic deny over policy allow", async () => {
 		const denyRule = compilePermissionRule(
 			"Bash(*)",

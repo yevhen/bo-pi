@@ -27,7 +27,7 @@ import { buildPreflightMetadata } from "./preflight.js";
 import { handlePreflightFailure } from "./approvals/failure.js";
 import { collectApprovals } from "./approvals/index.js";
 import { loadPermissionsState } from "./permissions/state.js";
-import { resolveToolDecisions } from "./permissions/decisions.js";
+import { resolveDeterministicDecisionForToolCall, resolveToolDecisions } from "./permissions/decisions.js";
 import { getPolicyRulesForTool } from "./permissions/matching.js";
 
 let persistentConfig = loadPersistentConfig();
@@ -69,6 +69,19 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		const toolCall = toToolCallSummary(event);
+		const deterministic = resolveDeterministicDecisionForToolCall(toolCall, ctx.cwd, permissions, logDebug);
+		if (deterministic && deterministic.decision !== "ask") {
+			logDebug(
+				`Skipping preflight LLM for ${toolCall.name}: deterministic ${deterministic.decision} decision already resolved.`,
+			);
+			if (deterministic.decision === "deny") {
+				const reason = deterministic.reason ?? "Blocked by deterministic rule.";
+				recordBlockedToolCall(toolCall.id, reason);
+				return { block: true, reason };
+			}
+			return undefined;
+		}
+
 		const toolCalls = [toolCall];
 		const preflightEvent = buildToolCallsContext(toolCalls, ctx, logDebug);
 		const policyRulesByToolCall: Record<string, string[]> = {};
