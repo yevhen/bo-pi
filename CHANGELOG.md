@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-03-01
+### Changed
+- Skip preflight model calls when deterministic `allow` or `deny` rules already decide the tool call.
+- Strengthen the preflight prompt with required tool-call IDs, stricter field requirements, and a response skeleton for JSON output.
+
+### Fixed
+- Retry failed preflight parsing/normalization up to two additional silent attempts before showing failure handling.
+
 ## [0.0.7] - 2026-02-21
 ### Added
 - Warn on conflicting custom rules before save, with options to edit (default), save anyway, or cancel.
