@@ -1,6 +1,6 @@
 import type { ExtensionContext, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
 import { streamSimple } from "@mariozechner/pi-ai";
-import type { Context } from "@mariozechner/pi-ai";
+import type { Api, Context, Model } from "@mariozechner/pi-ai";
 import { normalizePolicyResult } from "./permissions/policy.js";
 import type {
 	DebugLogger,
@@ -19,6 +19,9 @@ import {
 	stripCodeFence,
 } from "./llm-utils.js";
 import { capitalizeFirst, escapeRegExp } from "./utils/text.js";
+
+const PREFLIGHT_MAX_ATTEMPTS = 3; // initial try + 2 silent retries
+const PREFLIGHT_RETRY_DELAYS_MS = [150, 400];
 
 export async function buildPreflightMetadata(
 	event: ToolCallsContext,
@@ -48,42 +51,92 @@ export async function buildPreflightMetadata(
 	logDebug(`Preflight context messages:\n${JSON.stringify(preflightContext.messages, null, 2)}`);
 	logDebug(`Preflight policy rules by tool call:\n${JSON.stringify(policyRulesByToolCall, null, 2)}`);
 
+	let lastReason = "Preflight request failed.";
+	for (let attempt = 1; attempt <= PREFLIGHT_MAX_ATTEMPTS; attempt += 1) {
+		if (attempt > 1) {
+			logDebug(`Retrying preflight (attempt ${attempt}/${PREFLIGHT_MAX_ATTEMPTS}) after: ${lastReason}`);
+		}
+
+		const attemptResult = await runPreflightAttempt(
+			event,
+			policyRulesByToolCall,
+			preflightContext,
+			modelWithKey.model,
+			modelWithKey.apiKey,
+			logDebug,
+			attempt,
+		);
+		if (attemptResult.status === "ok") {
+			return attemptResult;
+		}
+
+		lastReason = attemptResult.reason;
+		if (attempt < PREFLIGHT_MAX_ATTEMPTS) {
+			const delayMs = PREFLIGHT_RETRY_DELAYS_MS[attempt - 1] ?? PREFLIGHT_RETRY_DELAYS_MS.at(-1) ?? 0;
+			if (delayMs > 0) {
+				await wait(delayMs);
+			}
+		}
+	}
+
+	logDebug(`Preflight failed after ${PREFLIGHT_MAX_ATTEMPTS} attempts: ${lastReason}`);
+	return { status: "error", reason: lastReason };
+}
+
+async function runPreflightAttempt(
+	event: ToolCallsContext,
+	policyRulesByToolCall: Record<string, string[]>,
+	preflightContext: Context,
+	model: Model<Api>,
+	apiKey: string,
+	logDebug: DebugLogger,
+	attempt: number,
+): Promise<PreflightAttempt> {
 	try {
-		const response = await streamSimple(modelWithKey.model, preflightContext, { apiKey: modelWithKey.apiKey });
+		const response = await streamSimple(model, preflightContext, { apiKey });
 		for await (const _ of response) {
 			// Drain stream to completion.
 		}
 		const result = await response.result();
 		const text = extractText(result.content);
-		logDebug(`Preflight raw response:\n${text ?? ""}`);
+		logDebug(`Preflight raw response (attempt ${attempt}):\n${text ?? ""}`);
 		if (!text) {
 			const reason = "Preflight response was empty.";
-			logDebug(`Preflight failed: ${reason}`);
+			logDebug(`Preflight attempt ${attempt} failed: ${reason}`);
 			return { status: "error", reason };
 		}
 		const parsed = parsePreflightResponse(text);
 		if (!parsed) {
 			const reason = "Preflight response was not valid JSON.";
-			logDebug(`Preflight failed: ${reason}`);
+			logDebug(`Preflight attempt ${attempt} failed: ${reason}`);
 			return { status: "error", reason };
 		}
-		logDebug(`Preflight parsed response:\n${JSON.stringify(parsed, null, 2)}`);
+		logDebug(`Preflight parsed response (attempt ${attempt}):\n${JSON.stringify(parsed, null, 2)}`);
 		const normalized = normalizePreflight(parsed, event.toolCalls, policyRulesByToolCall);
 		if (!normalized) {
 			const reason = "Preflight response did not include valid intrinsic metadata for all tool calls.";
-			logDebug(`Preflight failed: ${reason}`);
+			logDebug(`Preflight attempt ${attempt} failed: ${reason}`);
 			return { status: "error", reason };
 		}
-		logDebug(`Preflight normalized metadata:\n${JSON.stringify(normalized.metadata, null, 2)}`);
-		logDebug(`Preflight normalized policy:\n${JSON.stringify(normalized.policyDecisions, null, 2)}`);
-		logDebug(`Preflight parsed ${Object.keys(normalized.metadata).length} tool call(s).`);
+		logDebug(`Preflight normalized metadata (attempt ${attempt}):\n${JSON.stringify(normalized.metadata, null, 2)}`);
+		logDebug(`Preflight normalized policy (attempt ${attempt}):\n${JSON.stringify(normalized.policyDecisions, null, 2)}`);
+		logDebug(`Preflight parsed ${Object.keys(normalized.metadata).length} tool call(s) on attempt ${attempt}.`);
 		return { status: "ok", metadata: normalized.metadata, policyDecisions: normalized.policyDecisions };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		const reason = message ? `Preflight request failed: ${message}` : "Preflight request failed.";
-		logDebug(`Preflight failed: ${reason}`);
+		logDebug(`Preflight attempt ${attempt} failed: ${reason}`);
 		return { status: "error", reason };
 	}
+}
+
+function wait(delayMs: number): Promise<void> {
+	if (delayMs <= 0) {
+		return Promise.resolve();
+	}
+	return new Promise((resolve) => {
+		setTimeout(resolve, delayMs);
+	});
 }
 
 function buildPreflightPrompt(
@@ -96,20 +149,44 @@ function buildPreflightPrompt(
 		args: toolCall.args,
 		policyRules: policyRulesByToolCall[toolCall.id] ?? [],
 	}));
+	const requiredIds = toolCalls.map((toolCall) => toolCall.id);
+	const skeleton = Object.fromEntries(
+		requiredIds.map((id) => [
+			id,
+			{
+				intrinsic: {
+					summary: "...",
+					destructive: false,
+				},
+				policy: {
+					decision: "none",
+					reason: "...",
+				},
+			},
+		]),
+	);
 
 	return [
 		"You are a tool preflight assistant.",
 		"Return JSON only.",
+		"The top-level response MUST be one JSON object.",
+		`Required top-level keys (exact): ${JSON.stringify(requiredIds)}.`,
 		"Return an object mapping toolCallId to this exact shape:",
 		"{ intrinsic: { summary: string, destructive: boolean, scope?: string[] }, policy: { decision: \"allow\"|\"ask\"|\"deny\"|\"none\", reason: string } }",
 		"Rules:",
+		"- Every required key must be present exactly once.",
 		"- intrinsic is always required for every tool call.",
+		"- intrinsic.summary must be a non-empty string.",
+		"- intrinsic.destructive must be a boolean.",
 		"- policy.decision must be allow|ask|deny when policy rules apply.",
 		"- policy.decision must be none when policyRules are empty or no rule is applicable.",
+		"- policy.reason must always be a non-empty string.",
 		"- Summaries should be short, human-friendly action phrases.",
 		"- Do not mention tool names or raw arguments in the summary.",
 		"- destructive = true only if the call changes data or system state.",
-		"- No markdown, no extra text.",
+		"- No markdown, no extra text, no code fences.",
+		"Response skeleton (fill every field):",
+		JSON.stringify(skeleton, null, 2),
 		"Tool calls:",
 		JSON.stringify(payload, null, 2),
 	].join("\n");

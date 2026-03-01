@@ -49,6 +49,22 @@ function buildEvent(toolCalls: ToolCallSummary[]): ToolCallsContext {
 	return { toolCalls, llmContext };
 }
 
+function createStreamResponse(text: string): Awaited<ReturnType<typeof streamSimple>> {
+	return {
+		async *[Symbol.asyncIterator]() {
+			return;
+		},
+		result: async () => ({
+			content: [
+				{
+					type: "text",
+					text,
+				},
+			],
+		}),
+	} as unknown as Awaited<ReturnType<typeof streamSimple>>;
+}
+
 describe("preflight parsing", () => {
 	it("parses JSON response with intrinsic and policy", () => {
 		const parsed = parsePreflightResponse(
@@ -85,24 +101,16 @@ describe("preflight parsing", () => {
 describe("buildPreflightMetadata", () => {
 	it("uses one LLM call for intrinsic+policy and logs prompt/raw response", async () => {
 		const streamMock = vi.mocked(streamSimple);
-		streamMock.mockResolvedValue({
-			async *[Symbol.asyncIterator]() {
-				return;
-			},
-			result: async () => ({
-				content: [
-					{
-						type: "text",
-						text: JSON.stringify({
-							"call-1": {
-								intrinsic: { summary: "List directory", destructive: false },
-								policy: { decision: "ask", reason: "Needs confirmation" },
-							},
-						}),
+		streamMock.mockResolvedValue(
+			createStreamResponse(
+				JSON.stringify({
+					"call-1": {
+						intrinsic: { summary: "List directory", destructive: false },
+						policy: { decision: "ask", reason: "Needs confirmation" },
 					},
-				],
-			}),
-		} as unknown as Awaited<ReturnType<typeof streamSimple>>);
+				}),
+			),
+		);
 
 		const logs: string[] = [];
 		const toolCalls: ToolCallSummary[] = [{ id: "call-1", name: "bash", args: { command: "ls" } }];
@@ -125,5 +133,62 @@ describe("buildPreflightMetadata", () => {
 		}
 		expect(logs.some((line) => line.includes("Preflight prompt"))).toBe(true);
 		expect(logs.some((line) => line.includes("Preflight raw response"))).toBe(true);
+	});
+
+	it("retries twice when parsing/normalization fails and eventually succeeds", async () => {
+		const streamMock = vi.mocked(streamSimple);
+		streamMock.mockReset();
+		streamMock
+			.mockResolvedValueOnce(createStreamResponse("not-json"))
+			.mockResolvedValueOnce(createStreamResponse(JSON.stringify({ unexpected: true })))
+			.mockResolvedValueOnce(
+				createStreamResponse(
+					JSON.stringify({
+						"call-1": {
+							intrinsic: { summary: "List directory", destructive: false },
+							policy: { decision: "none", reason: "No rules" },
+						},
+					}),
+				),
+			);
+
+		const logs: string[] = [];
+		const toolCalls: ToolCallSummary[] = [{ id: "call-1", name: "bash", args: { command: "ls" } }];
+		const result = await buildPreflightMetadata(
+			buildEvent(toolCalls),
+			{ "call-1": [] },
+			createContext(),
+			baseConfig,
+			(message) => logs.push(message),
+		);
+
+		expect(streamMock).toHaveBeenCalledTimes(3);
+		expect(result.status).toBe("ok");
+		expect(logs.some((line) => line.includes("Retrying preflight (attempt 2/3)"))).toBe(true);
+		expect(logs.some((line) => line.includes("Retrying preflight (attempt 3/3)"))).toBe(true);
+	});
+
+	it("returns error after exhausting retry budget", async () => {
+		const streamMock = vi.mocked(streamSimple);
+		streamMock.mockReset();
+		streamMock
+			.mockResolvedValueOnce(createStreamResponse("not-json"))
+			.mockResolvedValueOnce(createStreamResponse("still-not-json"))
+			.mockResolvedValueOnce(createStreamResponse("nope"));
+
+		const toolCalls: ToolCallSummary[] = [{ id: "call-1", name: "bash", args: { command: "ls" } }];
+		const result = await buildPreflightMetadata(
+			buildEvent(toolCalls),
+			{ "call-1": [] },
+			createContext(),
+			baseConfig,
+			() => undefined,
+		);
+
+		expect(streamMock).toHaveBeenCalledTimes(3);
+		expect(result).toEqual({
+			status: "error",
+			reason: "Preflight response was not valid JSON.",
+		});
 	});
 });
