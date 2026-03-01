@@ -4,6 +4,7 @@
 
 ### Fixed
 - Clear legacy npm auth tokens in the publish workflow so npm trusted publishing (OIDC) is used consistently.
+- Use Node 22 in the publish workflow so npm trusted publishing uses a compatible npm CLI.
 
 ## [0.0.9] - 2026-03-01
 ### Added

@@ -19,8 +19,13 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           registry-url: "https://registry.npmjs.org"
+
+      - name: Show runtime versions
+        run: |
+          node --version
+          npm --version
 
       - name: Validate tag and package version
         shell: bash
