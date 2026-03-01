@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+- GitHub Actions publish workflow that releases to npm on `bo-pi/v*` tag pushes using npm trusted publishing (OIDC).
+
+### Changed
+- Releasing guide now documents tag-driven automated publish and one-time trusted publisher setup.
+
 ## [0.0.8] - 2026-03-01
 ### Changed
 - Skip preflight model calls when deterministic `allow` or `deny` rules already decide the tool call.

@@ -1,0 +1,59 @@
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - "bo-pi/v*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Validate tag and package version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            echo "This workflow only publishes from tags."
+            exit 1
+          fi
+
+          TAG="${GITHUB_REF_NAME}"
+          VERSION_FROM_TAG="${TAG#bo-pi/v}"
+          if [[ "${VERSION_FROM_TAG}" == "${TAG}" ]]; then
+            echo "Tag must match bo-pi/vX.Y.Z, got: ${TAG}"
+            exit 1
+          fi
+
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+
+          echo "Tag version: ${VERSION_FROM_TAG}"
+          echo "Package version: ${PACKAGE_VERSION}"
+
+          if [[ "${VERSION_FROM_TAG}" != "${PACKAGE_VERSION}" ]]; then
+            echo "Tag/package version mismatch."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Publish package
+        run: npm publish --access public --provenance
