@@ -56,4 +56,8 @@ jobs:
         run: npm test
 
       - name: Publish package
-        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ""
+        run: |
+          npm config delete //registry.npmjs.org/:_authToken || true
+          npm publish --access public --provenance

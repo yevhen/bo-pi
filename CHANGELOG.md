@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Clear legacy npm auth tokens in the publish workflow so npm trusted publishing (OIDC) is used consistently.
+
 ## [0.0.9] - 2026-03-01
 ### Added
 - GitHub Actions publish workflow that releases to npm on `bo-pi/v*` tag pushes using npm trusted publishing (OIDC).
