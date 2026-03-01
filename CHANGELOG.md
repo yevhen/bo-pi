@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-03-01
 ### Added
 - GitHub Actions publish workflow that releases to npm on `bo-pi/v*` tag pushes using npm trusted publishing (OIDC).
 
