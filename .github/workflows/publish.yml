@@ -5,12 +5,13 @@ on:
     tags:
       - "bo-pi/v*"
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   publish:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
 
     steps:
       - name: Checkout
@@ -59,6 +60,22 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      - name: Check OIDC environment
+        run: |
+          if [[ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]]; then
+            echo "OIDC request URL is present"
+          else
+            echo "OIDC request URL is missing"
+            exit 1
+          fi
+
+          if [[ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then
+            echo "OIDC request token is present"
+          else
+            echo "OIDC request token is missing"
+            exit 1
+          fi
 
       - name: Publish package
         env:
