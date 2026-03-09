@@ -15,7 +15,8 @@
   "type": "module",
   "pi": {
     "extensions": [
-      "./extensions/preflight/index.ts"
+      "./extensions/preflight/index.ts",
+      "./extensions/macos-theme-sync/index.ts"
     ]
   },
   "peerDependencies": {
