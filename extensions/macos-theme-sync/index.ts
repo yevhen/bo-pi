@@ -60,7 +60,7 @@ ObjC.import('Foundation');
 var stateFile = "${STATE_FILE}";
 
 function isDark() {
-	var style = $.NSUserDefaults.alloc.initWithSuiteName('NSGlobalDomain')
+	var style = $.NSUserDefaults.standardUserDefaults
 		.stringForKey('AppleInterfaceStyle');
 	return (style && style.js === 'Dark');
 }
