@@ -27,7 +27,29 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 const STATE_FILE = "/tmp/pi-macos-theme";
+const STATE_DIR = path.dirname(STATE_FILE);
+const STATE_FILE_NAME = path.basename(STATE_FILE);
 const PID_FILE = "/tmp/pi-macos-theme.pid";
+const WATCH_RETRY_MS = 1000;
+
+type ThemeState = "dark" | "light";
+
+interface PiTheme {
+	name: string;
+}
+
+interface ThemeUi {
+	theme: { fg: (token: string, text: string) => string };
+	setTheme: (themeName: string) => void;
+	setStatus: (id: string, text: string | undefined) => void;
+	notify: (message: string, level: "info" | "warning" | "error") => void;
+	select: (title: string, options: string[]) => Promise<string | undefined>;
+	getAllThemes: () => PiTheme[];
+}
+
+interface ThemeContext {
+	ui: ThemeUi;
+}
 
 // ── JXA watcher script (runs inside osascript) ──────────
 
@@ -98,12 +120,32 @@ function isProcessAlive(pid: number): boolean {
 	}
 }
 
+function isExpectedWatcherProcess(pid: number): boolean {
+	if (!isProcessAlive(pid)) {
+		return false;
+	}
+
+	try {
+		const command = execSync(`ps -p ${pid} -o command=`, { encoding: "utf-8" }).trim();
+		return command.includes("osascript") && command.includes("JavaScript");
+	} catch {
+		return false;
+	}
+}
+
 function getRunningWatcherPid(): number | null {
 	try {
 		const pidStr = fs.readFileSync(PID_FILE, "utf-8").trim();
 		const pid = parseInt(pidStr, 10);
-		if (!Number.isNaN(pid) && isProcessAlive(pid)) {
+		if (!Number.isNaN(pid) && isExpectedWatcherProcess(pid)) {
 			return pid;
+		}
+
+		// PID file points to stale/unexpected process → remove it
+		try {
+			fs.unlinkSync(PID_FILE);
+		} catch {
+			// Best effort
 		}
 	} catch {
 		// PID file doesn't exist or can't be read
@@ -132,7 +174,7 @@ function ensureWatcherRunning(): void {
 	}
 }
 
-function readCurrentState(): "dark" | "light" {
+function readCurrentState(): ThemeState {
 	try {
 		const content = fs.readFileSync(STATE_FILE, "utf-8").trim();
 		if (content === "dark" || content === "light") {
@@ -141,6 +183,7 @@ function readCurrentState(): "dark" | "light" {
 	} catch {
 		// File doesn't exist yet — detect directly
 	}
+
 	// Fallback: direct query
 	try {
 		execSync("defaults read -g AppleInterfaceStyle 2>/dev/null", { encoding: "utf-8" });
@@ -183,21 +226,29 @@ function saveThemeMap(map: Record<string, string>): void {
 
 export default function (pi: ExtensionAPI) {
 	let fileWatcher: fs.FSWatcher | null = null;
-	let lastState: "dark" | "light" | null = null;
+	let watchRetryTimer: ReturnType<typeof setTimeout> | null = null;
+	let lastState: ThemeState | null = null;
 	let themeMap: Record<string, string> = {};
 
-	function resolvePiTheme(macosState: "dark" | "light", ctx: any): string {
+	function resolvePiTheme(macosState: ThemeState, ctx: ThemeContext): string {
 		const mapped = themeMap[macosState];
 		if (mapped) {
-			const available = ctx.ui.getAllThemes() as { name: string }[];
-			if (available.some((t: { name: string }) => t.name === mapped)) {
+			const available = ctx.ui.getAllThemes();
+			if (available.some((theme) => theme.name === mapped)) {
 				return mapped;
 			}
 		}
 		return macosState; // "dark" and "light" are built-in pi themes
 	}
 
-	function applyTheme(state: "dark" | "light", ctx: any) {
+	function updateStatus(ctx: ThemeContext, state: ThemeState) {
+		const theme = ctx.ui.theme;
+		const icon = state === "dark" ? "🌙" : "☀️";
+		const label = theme.fg("dim", ` ${icon}`);
+		ctx.ui.setStatus("macos-theme", label);
+	}
+
+	function applyTheme(state: ThemeState, ctx: ThemeContext) {
 		if (state === lastState) return;
 		lastState = state;
 		const piTheme = resolvePiTheme(state, ctx);
@@ -205,22 +256,59 @@ export default function (pi: ExtensionAPI) {
 		updateStatus(ctx, state);
 	}
 
-	function updateStatus(
-		ctx: { ui: { setStatus: (id: string, text: string | undefined) => void; theme: any } },
-		state: "dark" | "light",
-	) {
-		const theme = ctx.ui.theme;
-		const icon = state === "dark" ? "🌙" : "☀️";
-		const mapped = themeMap[state];
-		const label = mapped
-			? theme.fg("dim", ` ${icon} ${state} → ${mapped}`)
-			: theme.fg("dim", ` ${icon} ${state}`);
-		ctx.ui.setStatus("macos-theme", label);
+	function stopWatchingStateFile(): void {
+		if (fileWatcher) {
+			fileWatcher.close();
+			fileWatcher = null;
+		}
+	}
+
+	function clearRetryTimer(): void {
+		if (watchRetryTimer) {
+			clearTimeout(watchRetryTimer);
+			watchRetryTimer = null;
+		}
+	}
+
+	function scheduleWatchRetry(ctx: ThemeContext): void {
+		clearRetryTimer();
+		watchRetryTimer = setTimeout(() => {
+			watchRetryTimer = null;
+			ensureWatcherRunning();
+			startStateWatcher(ctx);
+		}, WATCH_RETRY_MS);
+	}
+
+	function startStateWatcher(ctx: ThemeContext): void {
+		stopWatchingStateFile();
+
+		try {
+			fileWatcher = fs.watch(STATE_DIR, (_eventType, filename) => {
+				if (!filename) {
+					applyTheme(readCurrentState(), ctx);
+					return;
+				}
+
+				const changedFile = typeof filename === "string" ? filename : filename.toString("utf-8");
+				if (changedFile !== STATE_FILE_NAME) {
+					return;
+				}
+
+				applyTheme(readCurrentState(), ctx);
+			});
+
+			fileWatcher.on("error", () => {
+				stopWatchingStateFile();
+				scheduleWatchRetry(ctx);
+			});
+		} catch {
+			scheduleWatchRetry(ctx);
+		}
 	}
 
 	// ── Lifecycle ────────────────────────────────────────
 
-	pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", (_event, ctx) => {
 		// Only activate on macOS
 		if (process.platform !== "darwin") return;
 
@@ -233,46 +321,16 @@ export default function (pi: ExtensionAPI) {
 		// Ensure the shared watcher is running
 		ensureWatcherRunning();
 
-		// Wait briefly for watcher to write initial state
-		await new Promise((resolve) => setTimeout(resolve, 200));
+		// Apply initial theme immediately (with defaults fallback)
+		applyTheme(readCurrentState(), ctx as ThemeContext);
 
-		// Apply initial theme
-		const initialState = readCurrentState();
-		applyTheme(initialState, ctx);
-
-		// Watch for changes via fs.watch
-		try {
-			fileWatcher = fs.watch(STATE_FILE, () => {
-				const newState = readCurrentState();
-				applyTheme(newState, ctx);
-			});
-
-			fileWatcher.on("error", () => {
-				// File may not exist yet; retry after a short delay
-				fileWatcher?.close();
-				fileWatcher = null;
-				setTimeout(() => {
-					ensureWatcherRunning();
-					try {
-						fileWatcher = fs.watch(STATE_FILE, () => {
-							const newState = readCurrentState();
-							applyTheme(newState, ctx);
-						});
-					} catch {
-						// Give up on fs.watch — will still have correct initial state
-					}
-				}, 1000);
-			});
-		} catch {
-			// fs.watch failed — state file may not exist yet, that's ok
-		}
+		// Watch state file updates
+		startStateWatcher(ctx as ThemeContext);
 	});
 
 	pi.on("session_shutdown", () => {
-		if (fileWatcher) {
-			fileWatcher.close();
-			fileWatcher = null;
-		}
+		clearRetryTimer();
+		stopWatchingStateFile();
 		// Don't kill the watcher — other sessions may still use it.
 		// It's a detached 3 MB process, harmless until reboot.
 	});
@@ -280,50 +338,57 @@ export default function (pi: ExtensionAPI) {
 	// ── Commands ─────────────────────────────────────────
 
 	pi.registerCommand("macos-theme-map", {
-		description: "Map macOS dark/light mode to specific pi themes",
+		description: "Configure macOS dark/light mode mappings in one flow",
 		async handler(_args, ctx) {
 			if (process.platform !== "darwin") {
 				ctx.ui.notify("This command only works on macOS", "warning");
 				return;
 			}
 
-			const currentState = readCurrentState();
-			const allThemes = ctx.ui.getAllThemes() as { name: string }[];
-			const themeNames = allThemes.map((t: { name: string }) => t.name);
+			const themeCtx = ctx as ThemeContext;
+			const allThemes = themeCtx.ui.getAllThemes();
+			const themeNames = allThemes.map((theme) => theme.name);
 
-			const currentMapping = themeMap[currentState];
-			const currentPiTheme = resolvePiTheme(currentState, ctx);
+			const buildOptions = (state: ThemeState): string[] => {
+				const currentMapping = themeMap[state];
+				const currentPiTheme = resolvePiTheme(state, themeCtx);
+				return themeNames.map((name) => {
+					if (name === currentMapping) return `${name} ← current mapping`;
+					if (!currentMapping && name === currentPiTheme) return `${name} ← active (default)`;
+					return name;
+				});
+			};
 
-			const options = themeNames.map((name: string) => {
-				if (name === currentMapping) return `${name} ← current mapping`;
-				if (!currentMapping && name === currentPiTheme) return `${name} ← active (default)`;
-				return name;
-			});
-
-			const selected = await ctx.ui.select(
-				`macOS is in ${currentState} mode. Map "${currentState}" → pi theme:`,
-				options,
+			const darkSelected = await themeCtx.ui.select(
+				'Map macOS "dark" → pi theme:',
+				buildOptions("dark"),
 			);
-
-			if (!selected) return;
-
-			const cleanName = selected.replace(/ ← .*$/, "");
-
-			// If selected theme matches the default, remove the mapping
-			if (cleanName === currentState) {
-				delete themeMap[currentState];
-			} else {
-				themeMap[currentState] = cleanName;
+			if (!darkSelected) {
+				themeCtx.ui.notify("Mapping update cancelled", "warning");
+				return;
 			}
 
+			const lightSelected = await themeCtx.ui.select(
+				'Map macOS "light" → pi theme:',
+				buildOptions("light"),
+			);
+			if (!lightSelected) {
+				themeCtx.ui.notify("Mapping update cancelled", "warning");
+				return;
+			}
+
+			const darkTheme = darkSelected.replace(/ ← .*$/, "");
+			const lightTheme = lightSelected.replace(/ ← .*$/, "");
+
+			themeMap.dark = darkTheme;
+			themeMap.light = lightTheme;
 			saveThemeMap(themeMap);
 
-			// Apply immediately
-			ctx.ui.setTheme(cleanName);
-			lastState = currentState;
-			updateStatus(ctx, currentState);
+			// Re-apply current macOS state using updated mapping
+			lastState = null;
+			applyTheme(readCurrentState(), themeCtx);
 
-			ctx.ui.notify(`Mapped macOS "${currentState}" → pi "${cleanName}"`, "info");
+			themeCtx.ui.notify(`Updated mappings: dark → ${darkTheme}, light → ${lightTheme}`, "info");
 		},
 	});
 }
