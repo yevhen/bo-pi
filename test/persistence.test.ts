@@ -3,14 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import type { ToolCallSummary } from "../extensions/preflight/types.js";
+import type { ToolCallSummary } from "../preflight/types.js";
 import {
 	getWorkspacePermissionsPath,
 	persistPolicyOverride,
 	persistPolicyRule,
 	persistWorkspaceRule,
 	readPermissionsFile,
-} from "../extensions/preflight/permissions/persistence.js";
+} from "../preflight/permissions/persistence.js";
 
 const logDebug = () => {};
 

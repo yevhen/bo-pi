@@ -3,7 +3,7 @@ import {
 	canonicalizeRuleText,
 	normalizeRuleSuggestionLine,
 	normalizeRuleSuggestions,
-} from "../extensions/preflight/rule-suggestions.js";
+} from "../preflight/rule-suggestions.js";
 
 describe("rule suggestion normalization", () => {
 	it("capitalizes suggestion lines that start with lowercase", () => {

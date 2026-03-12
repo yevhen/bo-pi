@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildRuleContextSnapshot, getPolicyRuleCandidates } from "../extensions/preflight/rule-context.js";
-import type { PermissionsState } from "../extensions/preflight/types.js";
+import { buildRuleContextSnapshot, getPolicyRuleCandidates } from "../preflight/rule-context.js";
+import type { PermissionsState } from "../preflight/types.js";
 
 describe("rule context snapshot", () => {
 	it("includes wildcard and tool-specific context", () => {

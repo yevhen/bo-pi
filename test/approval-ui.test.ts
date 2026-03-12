@@ -5,7 +5,7 @@ import {
 	canCycleRuleSuggestion,
 	requestRuleConflictAction,
 	resolveCustomRule,
-} from "../extensions/preflight/approvals/approval-ui.js";
+} from "../preflight/approvals/approval-ui.js";
 
 describe("custom rule approval UI helpers", () => {
 	it("enables Tab suggestion accept/next only when allowed", () => {

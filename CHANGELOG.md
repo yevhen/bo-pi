@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+- Split docs so each extension now has its own README.
+- Add dedicated macOS Theme Sync guide and link both extensions from the root README.
+- Add extension-local `package.json`, `CHANGELOG.md`, and `LICENSE` files for the top-level `preflight/` and `macos-theme-sync/` directories.
+
+### Changed
+- Reframe the repo around real per-extension publishing instead of a single combined npm release.
+- Move shipped extensions to top-level directories (`preflight/`, `macos-theme-sync/`) to match the multi-extension repo structure.
+- Publish extensions by tag (`preflight/v*`, `macos-theme-sync/v*`) from their own directories.
+- Keep the root package as a private workspace for tests and release tooling.
+- Validate published package contents with `npm pack --dry-run` in the release workflow.
+
 ### Fixed
 - Clear legacy npm auth tokens in the publish workflow so npm trusted publishing (OIDC) is used consistently.
 - Use Node 22 in the publish workflow so npm trusted publishing uses a compatible npm CLI.

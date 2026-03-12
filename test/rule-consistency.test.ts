@@ -5,8 +5,8 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import {
 	evaluateRuleConsistency,
 	parseRuleConsistencyResponse,
-} from "../extensions/preflight/rule-consistency.js";
-import type { PreflightConfig, RuleContextSnapshot, ToolCallsContext } from "../extensions/preflight/types.js";
+} from "../preflight/rule-consistency.js";
+import type { PreflightConfig, RuleContextSnapshot, ToolCallsContext } from "../preflight/types.js";
 
 vi.mock("@mariozechner/pi-ai", async () => {
 	const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");

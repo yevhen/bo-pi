@@ -1,0 +1,32 @@
+{
+  "name": "@yevhen.b/pi-preflight",
+  "version": "0.0.9",
+  "description": "Tool-call approvals and policy rules for Pi.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yevhen/bo-pi.git",
+    "directory": "preflight"
+  },
+  "bugs": "https://github.com/yevhen/bo-pi/issues",
+  "homepage": "https://github.com/yevhen/bo-pi/tree/main/preflight",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "preflight"
+  ],
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-agent-core": "*",
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "dependencies": {
+    "ignore": "^7.0.5"
+  }
+}

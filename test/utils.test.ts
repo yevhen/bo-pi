@@ -1,7 +1,7 @@
 import { sep } from "node:path";
 import { describe, expect, it } from "vitest";
-import { deepEqual, stableStringify } from "../extensions/preflight/utils/json.js";
-import { isPathWithin, isScopeOutsideWorkspace, toPosixPath } from "../extensions/preflight/utils/path.js";
+import { deepEqual, stableStringify } from "../preflight/utils/json.js";
+import { isPathWithin, isScopeOutsideWorkspace, toPosixPath } from "../preflight/utils/path.js";
 
 describe("json utils", () => {
 	it("deepEqual compares nested values", () => {

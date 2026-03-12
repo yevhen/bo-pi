@@ -8,12 +8,12 @@ import type {
 	ToolCallSummary,
 	ToolCallsContext,
 	ToolPolicyDecision,
-} from "../extensions/preflight/types.js";
+} from "../preflight/types.js";
 import {
 	resolveDeterministicDecisionForToolCall,
 	resolveToolDecisions,
-} from "../extensions/preflight/permissions/decisions.js";
-import { compilePermissionRule } from "../extensions/preflight/permissions/matching.js";
+} from "../preflight/permissions/decisions.js";
+import { compilePermissionRule } from "../preflight/permissions/matching.js";
 
 const logLines: string[] = [];
 const logDebug = (message: string): void => {

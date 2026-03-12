@@ -3,7 +3,7 @@ import type {
 	PermissionRule,
 	PermissionSettingsFile,
 	ToolCallSummary,
-} from "../extensions/preflight/types.js";
+} from "../preflight/types.js";
 import {
 	buildPolicyOverrides,
 	buildPolicyRules,
@@ -12,7 +12,7 @@ import {
 	getPolicyOverridesForTool,
 	getPolicyRuleBucketsForTool,
 	matchesPermissionRule,
-} from "../extensions/preflight/permissions/matching.js";
+} from "../preflight/permissions/matching.js";
 
 const logDebug = () => {};
 

@@ -1,29 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionContext, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
 import type { Context } from "@mariozechner/pi-ai";
-import type { PreflightConfig, ToolCallsContext, ToolDecision } from "../extensions/preflight/types.js";
-import { collectApprovals } from "../extensions/preflight/approvals/index.js";
+import type { PreflightConfig, ToolCallsContext, ToolDecision } from "../preflight/types.js";
+import { collectApprovals } from "../preflight/approvals/index.js";
 import {
 	requestApproval,
 	requestRuleConflictAction,
-} from "../extensions/preflight/approvals/approval-ui.js";
-import { persistPolicyRule } from "../extensions/preflight/permissions/persistence.js";
-import { buildPreflightMetadata } from "../extensions/preflight/preflight.js";
-import { evaluateRuleConsistency } from "../extensions/preflight/rule-consistency.js";
-import { resolveToolDecisions } from "../extensions/preflight/permissions/decisions.js";
+} from "../preflight/approvals/approval-ui.js";
+import { persistPolicyRule } from "../preflight/permissions/persistence.js";
+import { buildPreflightMetadata } from "../preflight/preflight.js";
+import { evaluateRuleConsistency } from "../preflight/rule-consistency.js";
+import { resolveToolDecisions } from "../preflight/permissions/decisions.js";
 
-vi.mock("../extensions/preflight/approvals/approval-ui.js", () => ({
+vi.mock("../preflight/approvals/approval-ui.js", () => ({
 	requestApproval: vi.fn(),
 	requestRuleConflictAction: vi.fn(),
 }));
 
-vi.mock("../extensions/preflight/permissions/persistence.js", () => ({
+vi.mock("../preflight/permissions/persistence.js", () => ({
 	persistWorkspaceRule: vi.fn(),
 	persistPolicyOverride: vi.fn(),
 	persistPolicyRule: vi.fn(),
 }));
 
-vi.mock("../extensions/preflight/permissions/state.js", () => ({
+vi.mock("../preflight/permissions/state.js", () => ({
 	loadPermissionsState: vi.fn(() => ({
 		rules: { allow: [], ask: [], deny: [] },
 		policyRules: [],
@@ -31,9 +31,9 @@ vi.mock("../extensions/preflight/permissions/state.js", () => ({
 	})),
 }));
 
-vi.mock("../extensions/preflight/permissions/matching.js", async () => {
-	const actual = await vi.importActual<typeof import("../extensions/preflight/permissions/matching.js")>(
-		"../extensions/preflight/permissions/matching.js",
+vi.mock("../preflight/permissions/matching.js", async () => {
+	const actual = await vi.importActual<typeof import("../preflight/permissions/matching.js")>(
+		"../preflight/permissions/matching.js",
 	);
 	return {
 		...actual,
@@ -41,15 +41,15 @@ vi.mock("../extensions/preflight/permissions/matching.js", async () => {
 	};
 });
 
-vi.mock("../extensions/preflight/preflight.js", () => ({
+vi.mock("../preflight/preflight.js", () => ({
 	buildPreflightMetadata: vi.fn(),
 }));
 
-vi.mock("../extensions/preflight/permissions/decisions.js", () => ({
+vi.mock("../preflight/permissions/decisions.js", () => ({
 	resolveToolDecisions: vi.fn(),
 }));
 
-vi.mock("../extensions/preflight/rule-consistency.js", () => ({
+vi.mock("../preflight/rule-consistency.js", () => ({
 	evaluateRuleConsistency: vi.fn(),
 }));
 

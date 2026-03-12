@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { Api, Context, Model } from "@mariozechner/pi-ai";
-import type { PreflightConfig, ToolCallSummary, ToolCallsContext } from "../extensions/preflight/types.js";
+import type { PreflightConfig, ToolCallSummary, ToolCallsContext } from "../preflight/types.js";
 import {
 	buildPreflightMetadata,
 	normalizePreflight,
 	parsePreflightResponse,
-} from "../extensions/preflight/preflight.js";
+} from "../preflight/preflight.js";
 import { streamSimple } from "@mariozechner/pi-ai";
 
 vi.mock("@mariozechner/pi-ai", async () => {

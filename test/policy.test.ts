@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizePolicyResult, parsePolicyDecision } from "../extensions/preflight/permissions/policy.js";
+import { normalizePolicyResult, parsePolicyDecision } from "../preflight/permissions/policy.js";
 
 describe("policy parsing", () => {
 	it("parses decisions case-insensitively", () => {

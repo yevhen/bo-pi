@@ -6,8 +6,8 @@ import type {
 	RuleContextSnapshot,
 	ToolCallSummary,
 	ToolCallsContext,
-} from "../extensions/preflight/types.js";
-import { buildRuleSuggestion } from "../extensions/preflight/rule-suggestions.js";
+} from "../preflight/types.js";
+import { buildRuleSuggestion } from "../preflight/rule-suggestions.js";
 import { streamSimple } from "@mariozechner/pi-ai";
 
 vi.mock("@mariozechner/pi-ai", async () => {

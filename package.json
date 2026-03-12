@@ -1,7 +1,8 @@
 {
-  "name": "@yevhen.b/bo-pi",
+  "name": "bo-pi-workspace",
+  "private": true,
   "version": "0.0.9",
-  "description": "Pi extensions for tool preflight approvals.",
+  "description": "Workspace for Pi extensions, tests, and release tooling.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -9,16 +10,7 @@
   },
   "bugs": "https://github.com/yevhen/bo-pi/issues",
   "homepage": "https://github.com/yevhen/bo-pi#readme",
-  "keywords": [
-    "pi-package"
-  ],
   "type": "module",
-  "pi": {
-    "extensions": [
-      "./extensions/preflight/index.ts",
-      "./extensions/macos-theme-sync/index.ts"
-    ]
-  },
   "peerDependencies": {
     "@mariozechner/pi-agent-core": "*",
     "@mariozechner/pi-ai": "*",
@@ -36,7 +28,6 @@
     "vitest": "^3.2.4"
   },
   "files": [
-    "extensions",
     "docs",
     "README.md",
     "CHANGELOG.md",

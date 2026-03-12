@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseConfig, parseContextValue } from "../extensions/preflight/config.js";
+import { parseConfig, parseContextValue } from "../preflight/config.js";
 
 describe("config parsing", () => {
 	it("normalizes context messages", () => {

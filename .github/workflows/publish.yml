@@ -1,9 +1,10 @@
-name: Publish to npm
+name: Publish extension to npm
 
 on:
   push:
     tags:
-      - "bo-pi/v*"
+      - "preflight/v*"
+      - "macos-theme-sync/v*"
 
 permissions:
   contents: read
@@ -31,7 +32,8 @@ jobs:
           node --version
           npm --version
 
-      - name: Validate tag and package version
+      - name: Resolve target extension from tag
+        id: target
         shell: bash
         run: |
           set -euo pipefail
@@ -42,14 +44,26 @@ jobs:
           fi
 
           TAG="${GITHUB_REF_NAME}"
-          VERSION_FROM_TAG="${TAG#bo-pi/v}"
-          if [[ "${VERSION_FROM_TAG}" == "${TAG}" ]]; then
-            echo "Tag must match bo-pi/vX.Y.Z, got: ${TAG}"
-            exit 1
-          fi
+          case "${TAG}" in
+            preflight/v*)
+              EXTENSION_DIR="preflight"
+              ;;
+            macos-theme-sync/v*)
+              EXTENSION_DIR="macos-theme-sync"
+              ;;
+            *)
+              echo "Unsupported tag format: ${TAG}"
+              exit 1
+              ;;
+          esac
 
-          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          VERSION_FROM_TAG="${TAG#${EXTENSION_DIR}/v}"
+          PACKAGE_VERSION="$(node -p "require('./${EXTENSION_DIR}/package.json').version")"
+          PACKAGE_NAME="$(node -p "require('./${EXTENSION_DIR}/package.json').name")"
 
+          echo "Tag: ${TAG}"
+          echo "Extension dir: ${EXTENSION_DIR}"
+          echo "Package: ${PACKAGE_NAME}"
           echo "Tag version: ${VERSION_FROM_TAG}"
           echo "Package version: ${PACKAGE_VERSION}"
 
@@ -58,11 +72,19 @@ jobs:
             exit 1
           fi
 
-      - name: Install dependencies
+          echo "extension_dir=${EXTENSION_DIR}" >> "$GITHUB_OUTPUT"
+          echo "package_name=${PACKAGE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "package_version=${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Install root dependencies
         run: npm ci
 
       - name: Run tests
         run: npm test
+
+      - name: Verify extension package contents
+        working-directory: ${{ steps.target.outputs.extension_dir }}
+        run: npm pack --dry-run
 
       - name: Check OIDC environment
         run: |
@@ -80,7 +102,8 @@ jobs:
             exit 1
           fi
 
-      - name: Publish package
+      - name: Publish extension package
+        working-directory: ${{ steps.target.outputs.extension_dir }}
         env:
           NODE_AUTH_TOKEN: ""
         run: |

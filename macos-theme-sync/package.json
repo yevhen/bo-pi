@@ -1,0 +1,28 @@
+{
+  "name": "@yevhen.b/pi-macos-theme-sync",
+  "version": "0.0.9",
+  "description": "Sync Pi's theme with macOS appearance changes.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yevhen/bo-pi.git",
+    "directory": "macos-theme-sync"
+  },
+  "bugs": "https://github.com/yevhen/bo-pi/issues",
+  "homepage": "https://github.com/yevhen/bo-pi/tree/main/macos-theme-sync",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "macos-theme",
+    "theme-sync"
+  ],
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  }
+}
