@@ -31,6 +31,8 @@ const STATE_DIR = path.dirname(STATE_FILE);
 const STATE_FILE_NAME = path.basename(STATE_FILE);
 const PID_FILE = "/tmp/pi-macos-theme.pid";
 const WATCH_RETRY_MS = 1000;
+const RECONCILE_INTERVAL_MS = 5000;
+const DEBUG_LOG_FILE = "macos-theme-sync.log";
 
 type ThemeState = "dark" | "light";
 
@@ -122,13 +124,18 @@ function isProcessAlive(pid: number): boolean {
 
 function isExpectedWatcherProcess(pid: number): boolean {
 	if (!isProcessAlive(pid)) {
+		logDebug(`Watcher pid ${pid} is not alive.`);
 		return false;
 	}
 
 	try {
 		const command = execSync(`ps -p ${pid} -o command=`, { encoding: "utf-8" }).trim();
-		return command.includes("osascript") && command.includes("JavaScript");
-	} catch {
+		const matches = command.includes("osascript") && command.includes("JavaScript");
+		logDebug(`Watcher pid ${pid} command check: ${matches ? "ok" : "unexpected"}. Command: ${command}`);
+		return matches;
+	} catch (error) {
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		logDebug(`Failed to inspect watcher pid ${pid}: ${errorMessage}`);
 		return false;
 	}
 }
@@ -138,9 +145,11 @@ function getRunningWatcherPid(): number | null {
 		const pidStr = fs.readFileSync(PID_FILE, "utf-8").trim();
 		const pid = parseInt(pidStr, 10);
 		if (!Number.isNaN(pid) && isExpectedWatcherProcess(pid)) {
+			logDebug(`Using existing watcher pid ${pid}.`);
 			return pid;
 		}
 
+		logDebug(`Removing stale watcher pid file: ${pidStr}`);
 		// PID file points to stale/unexpected process → remove it
 		try {
 			fs.unlinkSync(PID_FILE);
@@ -148,6 +157,7 @@ function getRunningWatcherPid(): number | null {
 			// Best effort
 		}
 	} catch {
+		logDebug("No valid watcher pid file found.");
 		// PID file doesn't exist or can't be read
 	}
 	return null;
@@ -158,6 +168,7 @@ function ensureWatcherRunning(): void {
 		return; // Already running
 	}
 
+	logDebug("Starting shared macOS theme watcher.");
 	const child = spawn("osascript", ["-l", "JavaScript", "-e", JXA_WATCHER], {
 		detached: true,
 		stdio: "ignore",
@@ -168,36 +179,77 @@ function ensureWatcherRunning(): void {
 	if (child.pid) {
 		try {
 			fs.writeFileSync(PID_FILE, String(child.pid) + "\n", "utf-8");
+			logDebug(`Started watcher pid ${child.pid}.`);
 		} catch {
-			// Best effort
+			logDebug(`Started watcher pid ${child.pid}, but failed to write pid file.`);
 		}
+	} else {
+		logDebug("Spawned watcher process without a pid.");
 	}
 }
 
-function readCurrentState(): ThemeState {
+function readStateFile(): ThemeState | null {
 	try {
 		const content = fs.readFileSync(STATE_FILE, "utf-8").trim();
 		if (content === "dark" || content === "light") {
+			logDebug(`Read state file value: ${content}`);
 			return content;
 		}
+		logDebug(`Ignored unexpected state file value: ${content}`);
 	} catch {
-		// File doesn't exist yet — detect directly
+		logDebug("State file missing/unreadable.");
 	}
+	return null;
+}
 
-	// Fallback: direct query
+function readSystemState(): ThemeState {
 	try {
 		execSync("defaults read -g AppleInterfaceStyle 2>/dev/null", { encoding: "utf-8" });
+		logDebug("Direct macOS appearance query returned dark.");
 		return "dark";
 	} catch {
+		logDebug("Direct macOS appearance query returned light.");
 		return "light";
 	}
 }
 
+function writeStateFile(state: ThemeState): void {
+	try {
+		fs.writeFileSync(STATE_FILE, `${state}\n`, "utf-8");
+		logDebug(`Wrote reconciled state file value: ${state}`);
+	} catch (error) {
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		logDebug(`Failed to write reconciled state file: ${errorMessage}`);
+	}
+}
+
+function readCurrentState(): ThemeState {
+	return readStateFile() ?? readSystemState();
+}
+
 // ── Theme Mapping ────────────────────────────────────────
 
-function getThemeMapPath(): string {
+function getAgentExtensionsDir(): string {
 	const agentDir = process.env.PI_AGENT_DIR || path.join(process.env.HOME || "~", ".pi", "agent");
-	return path.join(agentDir, "extensions", "macos-theme-map.json");
+	return path.join(agentDir, "extensions");
+}
+
+function getThemeMapPath(): string {
+	return path.join(getAgentExtensionsDir(), "macos-theme-map.json");
+}
+
+function getDebugLogPath(): string {
+	return path.join(getAgentExtensionsDir(), DEBUG_LOG_FILE);
+}
+
+function logDebug(message: string): void {
+	const line = `[${new Date().toISOString()}] ${message}\n`;
+	try {
+		fs.mkdirSync(getAgentExtensionsDir(), { recursive: true });
+		fs.appendFileSync(getDebugLogPath(), line, "utf-8");
+	} catch {
+		// Best effort
+	}
 }
 
 function loadThemeMap(): Record<string, string> {
@@ -205,9 +257,12 @@ function loadThemeMap(): Record<string, string> {
 		const content = fs.readFileSync(getThemeMapPath(), "utf-8");
 		const parsed = JSON.parse(content);
 		if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+			logDebug(`Loaded theme map: ${JSON.stringify(parsed)}`);
 			return parsed as Record<string, string>;
 		}
+		logDebug("Theme map file contained a non-object value; ignoring.");
 	} catch {
+		logDebug("No valid theme map file found; using defaults.");
 		// File doesn't exist or invalid JSON
 	}
 	return {};
@@ -220,6 +275,7 @@ function saveThemeMap(map: Record<string, string>): void {
 		fs.mkdirSync(dir, { recursive: true });
 	}
 	fs.writeFileSync(mapPath, JSON.stringify(map, null, 2) + "\n", "utf-8");
+	logDebug(`Saved theme map: ${JSON.stringify(map)}`);
 }
 
 // ── Extension ────────────────────────────────────────────
@@ -227,6 +283,7 @@ function saveThemeMap(map: Record<string, string>): void {
 export default function (pi: ExtensionAPI) {
 	let fileWatcher: fs.FSWatcher | null = null;
 	let watchRetryTimer: ReturnType<typeof setTimeout> | null = null;
+	let reconcileTimer: ReturnType<typeof setInterval> | null = null;
 	let lastState: ThemeState | null = null;
 	let themeMap: Record<string, string> = {};
 
@@ -249,15 +306,20 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function applyTheme(state: ThemeState, ctx: ThemeContext) {
-		if (state === lastState) return;
+		if (state === lastState) {
+			logDebug(`Skipping theme apply for unchanged state: ${state}`);
+			return;
+		}
 		lastState = state;
 		const piTheme = resolvePiTheme(state, ctx);
+		logDebug(`Applying macOS state ${state} -> pi theme ${piTheme}`);
 		ctx.ui.setTheme(piTheme);
 		updateStatus(ctx, state);
 	}
 
 	function stopWatchingStateFile(): void {
 		if (fileWatcher) {
+			logDebug("Stopping state file watcher.");
 			fileWatcher.close();
 			fileWatcher = null;
 		}
@@ -270,8 +332,36 @@ export default function (pi: ExtensionAPI) {
 		}
 	}
 
+	function stopReconcileTimer(): void {
+		if (reconcileTimer) {
+			clearInterval(reconcileTimer);
+			reconcileTimer = null;
+		}
+	}
+
+	function reconcileState(ctx: ThemeContext): void {
+		const systemState = readSystemState();
+		const fileState = readStateFile();
+		if (fileState !== systemState) {
+			logDebug(
+				`Reconciling stale theme state. system=${systemState} file=${fileState ?? "missing"}`,
+			);
+			writeStateFile(systemState);
+		}
+		applyTheme(systemState, ctx);
+	}
+
+	function startReconcileTimer(ctx: ThemeContext): void {
+		stopReconcileTimer();
+		logDebug(`Starting reconcile timer (${RECONCILE_INTERVAL_MS}ms).`);
+		reconcileTimer = setInterval(() => {
+			reconcileState(ctx);
+		}, RECONCILE_INTERVAL_MS);
+	}
+
 	function scheduleWatchRetry(ctx: ThemeContext): void {
 		clearRetryTimer();
+		logDebug(`Scheduling state watcher retry in ${WATCH_RETRY_MS}ms.`);
 		watchRetryTimer = setTimeout(() => {
 			watchRetryTimer = null;
 			ensureWatcherRunning();
@@ -283,13 +373,16 @@ export default function (pi: ExtensionAPI) {
 		stopWatchingStateFile();
 
 		try {
-			fileWatcher = fs.watch(STATE_DIR, (_eventType, filename) => {
+			logDebug(`Starting fs.watch on ${STATE_DIR} for ${STATE_FILE_NAME}.`);
+			fileWatcher = fs.watch(STATE_DIR, (eventType, filename) => {
 				if (!filename) {
+					logDebug(`Watcher event without filename: ${eventType}`);
 					applyTheme(readCurrentState(), ctx);
 					return;
 				}
 
 				const changedFile = typeof filename === "string" ? filename : filename.toString("utf-8");
+				logDebug(`Watcher event: ${eventType} ${changedFile}`);
 				if (changedFile !== STATE_FILE_NAME) {
 					return;
 				}
@@ -297,11 +390,15 @@ export default function (pi: ExtensionAPI) {
 				applyTheme(readCurrentState(), ctx);
 			});
 
-			fileWatcher.on("error", () => {
+			fileWatcher.on("error", (error) => {
+				const errorMessage = error instanceof Error ? error.message : String(error);
+				logDebug(`State watcher error: ${errorMessage}`);
 				stopWatchingStateFile();
 				scheduleWatchRetry(ctx);
 			});
-		} catch {
+		} catch (error) {
+			const errorMessage = error instanceof Error ? error.message : String(error);
+			logDebug(`Failed to start state watcher: ${errorMessage}`);
 			scheduleWatchRetry(ctx);
 		}
 	}
@@ -309,11 +406,18 @@ export default function (pi: ExtensionAPI) {
 	// ── Lifecycle ────────────────────────────────────────
 
 	pi.on("session_start", (_event, ctx) => {
+		logDebug(`Session start. platform=${process.platform} ghosttyPort=${process.env.GHOSTTY_AGENT_PORT ?? "none"}`);
 		// Only activate on macOS
-		if (process.platform !== "darwin") return;
+		if (process.platform !== "darwin") {
+			logDebug("Skipping macOS theme sync: non-darwin platform.");
+			return;
+		}
 
 		// Skip if running inside Ghostty IDE (ghostty-ide-sync handles that)
-		if (process.env.GHOSTTY_AGENT_PORT) return;
+		if (process.env.GHOSTTY_AGENT_PORT) {
+			logDebug("Skipping macOS theme sync: Ghostty IDE sync is active.");
+			return;
+		}
 
 		// Load theme mapping
 		themeMap = loadThemeMap();
@@ -321,15 +425,20 @@ export default function (pi: ExtensionAPI) {
 		// Ensure the shared watcher is running
 		ensureWatcherRunning();
 
-		// Apply initial theme immediately (with defaults fallback)
-		applyTheme(readCurrentState(), ctx as ThemeContext);
+		const themeCtx = ctx as ThemeContext;
+
+		// Apply initial theme from direct system state, not the potentially stale state file
+		reconcileState(themeCtx);
 
 		// Watch state file updates
-		startStateWatcher(ctx as ThemeContext);
+		startStateWatcher(themeCtx);
+		startReconcileTimer(themeCtx);
 	});
 
 	pi.on("session_shutdown", () => {
+		logDebug("Session shutdown.");
 		clearRetryTimer();
+		stopReconcileTimer();
 		stopWatchingStateFile();
 		// Don't kill the watcher — other sessions may still use it.
 		// It's a detached 3 MB process, harmless until reboot.
@@ -380,6 +489,7 @@ export default function (pi: ExtensionAPI) {
 			const darkTheme = darkSelected.replace(/ ← .*$/, "");
 			const lightTheme = lightSelected.replace(/ ← .*$/, "");
 
+			logDebug(`Updating theme map via command: dark -> ${darkTheme}, light -> ${lightTheme}`);
 			themeMap.dark = darkTheme;
 			themeMap.light = lightTheme;
 			saveThemeMap(themeMap);
