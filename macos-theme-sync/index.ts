@@ -33,6 +33,7 @@ const PID_FILE = "/tmp/pi-macos-theme.pid";
 const WATCH_RETRY_MS = 1000;
 const RECONCILE_INTERVAL_MS = 5000;
 const DEBUG_LOG_FILE = "macos-theme-sync.log";
+const DEBUG_ENV_VARS = ["PI_MACOS_THEME_SYNC_DEBUG", "BO_PI_MACOS_THEME_SYNC_DEBUG"] as const;
 
 type ThemeState = "dark" | "light";
 
@@ -192,12 +193,11 @@ function readStateFile(): ThemeState | null {
 	try {
 		const content = fs.readFileSync(STATE_FILE, "utf-8").trim();
 		if (content === "dark" || content === "light") {
-			logDebug(`Read state file value: ${content}`);
 			return content;
 		}
 		logDebug(`Ignored unexpected state file value: ${content}`);
 	} catch {
-		logDebug("State file missing/unreadable.");
+		// Missing/unreadable is expected during startup.
 	}
 	return null;
 }
@@ -205,10 +205,8 @@ function readStateFile(): ThemeState | null {
 function readSystemState(): ThemeState {
 	try {
 		execSync("defaults read -g AppleInterfaceStyle 2>/dev/null", { encoding: "utf-8" });
-		logDebug("Direct macOS appearance query returned dark.");
 		return "dark";
 	} catch {
-		logDebug("Direct macOS appearance query returned light.");
 		return "light";
 	}
 }
@@ -242,7 +240,17 @@ function getDebugLogPath(): string {
 	return path.join(getAgentExtensionsDir(), DEBUG_LOG_FILE);
 }
 
+function isDebugEnabled(): boolean {
+	return DEBUG_ENV_VARS.some((name) => {
+		const value = process.env[name]?.trim().toLowerCase();
+		return value === "1" || value === "true" || value === "yes" || value === "on";
+	});
+}
+
 function logDebug(message: string): void {
+	if (!isDebugEnabled()) {
+		return;
+	}
 	const line = `[${new Date().toISOString()}] ${message}\n`;
 	try {
 		fs.mkdirSync(getAgentExtensionsDir(), { recursive: true });
@@ -307,7 +315,6 @@ export default function (pi: ExtensionAPI) {
 
 	function applyTheme(state: ThemeState, ctx: ThemeContext) {
 		if (state === lastState) {
-			logDebug(`Skipping theme apply for unchanged state: ${state}`);
 			return;
 		}
 		lastState = state;
@@ -374,15 +381,13 @@ export default function (pi: ExtensionAPI) {
 
 		try {
 			logDebug(`Starting fs.watch on ${STATE_DIR} for ${STATE_FILE_NAME}.`);
-			fileWatcher = fs.watch(STATE_DIR, (eventType, filename) => {
+			fileWatcher = fs.watch(STATE_DIR, (_eventType, filename) => {
 				if (!filename) {
-					logDebug(`Watcher event without filename: ${eventType}`);
 					applyTheme(readCurrentState(), ctx);
 					return;
 				}
 
 				const changedFile = typeof filename === "string" ? filename : filename.toString("utf-8");
-				logDebug(`Watcher event: ${eventType} ${changedFile}`);
 				if (changedFile !== STATE_FILE_NAME) {
 					return;
 				}

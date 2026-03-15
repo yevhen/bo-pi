@@ -8,10 +8,10 @@
 - Add extension-local `package.json`, `CHANGELOG.md`, and `LICENSE` files for the top-level `preflight/` and `macos-theme-sync/` directories.
 
 ### Changed
-- Reframe the repo around real per-extension publishing instead of a single combined npm release.
+- Reframe the repo around standalone extension packages plus the existing umbrella `@yevhen.b/bo-pi` package.
 - Move shipped extensions to top-level directories (`preflight/`, `macos-theme-sync/`) to match the multi-extension repo structure.
-- Publish extensions by tag (`preflight/v*`, `macos-theme-sync/v*`) from their own directories.
-- Keep the root package as a private workspace for tests and release tooling.
+- Publish packages by tag (`bo-pi/v*`, `preflight/v*`, `macos-theme-sync/v*`) from the matching directory.
+- Keep the root package as a publishable umbrella bundle while standalone packages remain independently installable.
 - Validate published package contents with `npm pack --dry-run` in the release workflow.
 
 ### Fixed

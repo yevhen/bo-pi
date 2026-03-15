@@ -50,6 +50,7 @@ pi -e npm:@yevhen.b/pi-macos-theme-sync
 - Only runs on macOS.
 - If Pi is running inside Ghostty IDE, this extension stays inactive so Ghostty-specific syncing can take over.
 - The shared watcher is detached and intentionally not killed on session shutdown, so multiple Pi sessions can reuse it.
+- Debug logging is off by default. To enable it for troubleshooting, start Pi with `PI_MACOS_THEME_SYNC_DEBUG=1` (or `BO_PI_MACOS_THEME_SYNC_DEBUG=1`).
 
 ## More docs
 

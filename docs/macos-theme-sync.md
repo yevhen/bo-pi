@@ -49,9 +49,27 @@ The extension validates mappings against the list of themes returned by `ctx.ui.
 Persistent/theme-related files:
 
 - Theme map: `~/.pi/agent/extensions/macos-theme-map.json`
-- Debug log: `~/.pi/agent/extensions/macos-theme-sync.log`
+- Debug log: `~/.pi/agent/extensions/macos-theme-sync.log` (only written when debug is enabled)
 - Shared state: `/tmp/pi-macos-theme`
 - Shared watcher pid: `/tmp/pi-macos-theme.pid`
+
+## Debug logging
+
+Debug logging is disabled by default.
+
+Enable it only for troubleshooting by starting Pi with one of these environment variables:
+
+```bash
+PI_MACOS_THEME_SYNC_DEBUG=1 pi -e /path/to/extension-or-package
+```
+
+or
+
+```bash
+BO_PI_MACOS_THEME_SYNC_DEBUG=1 pi -e /path/to/extension-or-package
+```
+
+When debug logging is disabled, the extension should not write the debug log at all.
 
 ## Failure handling
 

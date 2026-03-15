@@ -1,8 +1,9 @@
-name: Publish extension to npm
+name: Publish package to npm
 
 on:
   push:
     tags:
+      - "bo-pi/v*"
       - "preflight/v*"
       - "macos-theme-sync/v*"
 
@@ -32,7 +33,7 @@ jobs:
           node --version
           npm --version
 
-      - name: Resolve target extension from tag
+      - name: Resolve target package from tag
         id: target
         shell: bash
         run: |
@@ -45,11 +46,17 @@ jobs:
 
           TAG="${GITHUB_REF_NAME}"
           case "${TAG}" in
+            bo-pi/v*)
+              PACKAGE_DIR="."
+              PACKAGE_LABEL="bo-pi"
+              ;;
             preflight/v*)
-              EXTENSION_DIR="preflight"
+              PACKAGE_DIR="preflight"
+              PACKAGE_LABEL="preflight"
               ;;
             macos-theme-sync/v*)
-              EXTENSION_DIR="macos-theme-sync"
+              PACKAGE_DIR="macos-theme-sync"
+              PACKAGE_LABEL="macos-theme-sync"
               ;;
             *)
               echo "Unsupported tag format: ${TAG}"
@@ -57,12 +64,12 @@ jobs:
               ;;
           esac
 
-          VERSION_FROM_TAG="${TAG#${EXTENSION_DIR}/v}"
-          PACKAGE_VERSION="$(node -p "require('./${EXTENSION_DIR}/package.json').version")"
-          PACKAGE_NAME="$(node -p "require('./${EXTENSION_DIR}/package.json').name")"
+          VERSION_FROM_TAG="${TAG#${PACKAGE_LABEL}/v}"
+          PACKAGE_VERSION="$(node -p "require('./${PACKAGE_DIR}/package.json').version")"
+          PACKAGE_NAME="$(node -p "require('./${PACKAGE_DIR}/package.json').name")"
 
           echo "Tag: ${TAG}"
-          echo "Extension dir: ${EXTENSION_DIR}"
+          echo "Package dir: ${PACKAGE_DIR}"
           echo "Package: ${PACKAGE_NAME}"
           echo "Tag version: ${VERSION_FROM_TAG}"
           echo "Package version: ${PACKAGE_VERSION}"
@@ -72,7 +79,7 @@ jobs:
             exit 1
           fi
 
-          echo "extension_dir=${EXTENSION_DIR}" >> "$GITHUB_OUTPUT"
+          echo "package_dir=${PACKAGE_DIR}" >> "$GITHUB_OUTPUT"
           echo "package_name=${PACKAGE_NAME}" >> "$GITHUB_OUTPUT"
           echo "package_version=${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
 
@@ -82,8 +89,8 @@ jobs:
       - name: Run tests
         run: npm test
 
-      - name: Verify extension package contents
-        working-directory: ${{ steps.target.outputs.extension_dir }}
+      - name: Verify package contents
+        working-directory: ${{ steps.target.outputs.package_dir }}
         run: npm pack --dry-run
 
       - name: Check OIDC environment
@@ -102,8 +109,8 @@ jobs:
             exit 1
           fi
 
-      - name: Publish extension package
-        working-directory: ${{ steps.target.outputs.extension_dir }}
+      - name: Publish package
+        working-directory: ${{ steps.target.outputs.package_dir }}
         env:
           NODE_AUTH_TOKEN: ""
         run: |
