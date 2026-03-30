@@ -1,9 +1,10 @@
 # Releasing
 
-This repo publishes three npm packages:
+This repo publishes four npm packages:
 
-- root package `@yevhen.b/bo-pi` — umbrella package bundling both extensions
+- root package `@yevhen.b/bo-pi` — umbrella package bundling all extensions
 - `preflight/` -> `@yevhen.b/pi-preflight`
+- `pi-assistant/` -> `@yevhen.b/pi-assistant`
 - `macos-theme-sync/` -> `@yevhen.b/pi-macos-theme-sync`
 
 ## Tag format
@@ -13,6 +14,7 @@ Releases are per package:
 ```text
 bo-pi/vX.Y.Z
 preflight/vX.Y.Z
+pi-assistant/vX.Y.Z
 macos-theme-sync/vX.Y.Z
 ```
 
@@ -21,6 +23,7 @@ Examples:
 ```text
 bo-pi/v0.1.0
 preflight/v0.1.0
+pi-assistant/v0.1.0
 macos-theme-sync/v0.1.0
 ```
 
@@ -46,6 +49,11 @@ Add a **Trusted Publisher** in npm for each published package:
 - Workflow file: `.github/workflows/publish.yml`
 
 ### `@yevhen.b/pi-preflight`
+- Provider: **GitHub Actions**
+- Repository: `yevhen/bo-pi`
+- Workflow file: `.github/workflows/publish.yml`
+
+### `@yevhen.b/pi-assistant`
 - Provider: **GitHub Actions**
 - Repository: `yevhen/bo-pi`
 - Workflow file: `.github/workflows/publish.yml`
@@ -83,6 +91,18 @@ git tag -a preflight/vX.Y.Z -m "preflight vX.Y.Z"
 git push origin main preflight/vX.Y.Z
 ```
 
+### Pi Assistant
+1. Update `pi-assistant/CHANGELOG.md`.
+2. Bump `pi-assistant/package.json` version.
+3. If needed, update shared docs (`README.md`, `pi-assistant/README.md`).
+4. Commit release prep.
+5. Tag and push:
+
+```bash
+git tag -a pi-assistant/vX.Y.Z -m "pi-assistant vX.Y.Z"
+git push origin main pi-assistant/vX.Y.Z
+```
+
 ### macOS Theme Sync
 1. Update `macos-theme-sync/CHANGELOG.md`.
 2. Bump `macos-theme-sync/package.json` version.
@@ -109,6 +129,13 @@ npm publish --access public
 ### Preflight
 ```bash
 cd /path/to/bo-pi/preflight
+npm whoami
+npm publish --access public
+```
+
+### Pi Assistant
+```bash
+cd /path/to/bo-pi/pi-assistant
 npm whoami
 npm publish --access public
 ```

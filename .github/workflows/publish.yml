@@ -5,6 +5,7 @@ on:
     tags:
       - "bo-pi/v*"
       - "preflight/v*"
+      - "pi-assistant/v*"
       - "macos-theme-sync/v*"
 
 permissions:
@@ -53,6 +54,10 @@ jobs:
             preflight/v*)
               PACKAGE_DIR="preflight"
               PACKAGE_LABEL="preflight"
+              ;;
+            pi-assistant/v*)
+              PACKAGE_DIR="pi-assistant"
+              PACKAGE_LABEL="pi-assistant"
               ;;
             macos-theme-sync/v*)
               PACKAGE_DIR="macos-theme-sync"
