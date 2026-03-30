@@ -1,7 +1,7 @@
 {
   "name": "@yevhen.b/bo-pi",
   "version": "0.0.9",
-  "description": "Umbrella Pi package bundling preflight and macOS theme sync.",
+  "description": "Umbrella Pi package bundling preflight, Pi Assistant, and macOS theme sync.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -13,6 +13,7 @@
     "pi-package",
     "pi-extension",
     "preflight",
+    "pi-assistant",
     "macos-theme",
     "theme-sync"
   ],
@@ -20,6 +21,7 @@
   "pi": {
     "extensions": [
       "./preflight/index.ts",
+      "./pi-assistant/index.ts",
       "./macos-theme-sync/index.ts"
     ]
   },
@@ -33,7 +35,14 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "ignore": "^7.0.5"
+    "ignore": "^7.0.5",
+    "rehype-stringify": "^10.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "remark-rehype": "^11.1.2",
+    "remark-stringify": "^11.0.0",
+    "strip-markdown": "^6.0.0",
+    "unified": "^11.0.5"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^3.2.4",
@@ -41,6 +50,7 @@
   },
   "files": [
     "preflight",
+    "pi-assistant",
     "macos-theme-sync",
     "docs",
     "README.md",

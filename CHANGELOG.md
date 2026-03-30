@@ -3,16 +3,19 @@
 ## [Unreleased]
 
 ### Added
+- Add the standalone Pi Assistant extension package and bundle it into the umbrella `@yevhen.b/bo-pi` package.
 - Split docs so each extension now has its own README.
 - Add dedicated macOS Theme Sync guide and link both extensions from the root README.
 - Add extension-local `package.json`, `CHANGELOG.md`, and `LICENSE` files for the top-level `preflight/` and `macos-theme-sync/` directories.
+- Add the `/assistant` command for copying the last completed assistant response to the clipboard as Markdown, plain text, or macOS rich text, and for saving/appending it to files.
 
 ### Changed
 - Reframe the repo around standalone extension packages plus the existing umbrella `@yevhen.b/bo-pi` package.
 - Move shipped extensions to top-level directories (`preflight/`, `macos-theme-sync/`) to match the multi-extension repo structure.
-- Publish packages by tag (`bo-pi/v*`, `preflight/v*`, `macos-theme-sync/v*`) from the matching directory.
+- Publish packages by tag (`bo-pi/v*`, `preflight/v*`, `pi-assistant/v*`, `macos-theme-sync/v*`) from the matching directory.
 - Keep the root package as a publishable umbrella bundle while standalone packages remain independently installable.
 - Validate published package contents with `npm pack --dry-run` in the release workflow.
+- Switch Pi Assistant Markdown conversion to the `remark` / `unified` stack for HTML and plain-text rendering, including GFM support.
 
 ### Fixed
 - Clear legacy npm auth tokens in the publish workflow so npm trusted publishing (OIDC) is used consistently.

@@ -1,0 +1,38 @@
+{
+  "name": "@yevhen.b/pi-assistant",
+  "version": "0.0.9",
+  "description": "Pi assistant workflow extensions for dialog-oriented commands and UI.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yevhen/bo-pi.git",
+    "directory": "pi-assistant"
+  },
+  "bugs": "https://github.com/yevhen/bo-pi/issues",
+  "homepage": "https://github.com/yevhen/bo-pi/tree/main/pi-assistant",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "assistant",
+    "dialog",
+    "markdown"
+  ],
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "dependencies": {
+    "rehype-stringify": "^10.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "remark-rehype": "^11.1.2",
+    "remark-stringify": "^11.0.0",
+    "strip-markdown": "^6.0.0",
+    "unified": "^11.0.5"
+  }
+}
