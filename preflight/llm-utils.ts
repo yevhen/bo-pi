@@ -1,5 +1,5 @@
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { Api, AssistantMessage, Message, Model, TextContent } from "@mariozechner/pi-ai";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Api, AssistantMessage, Message, Model, TextContent } from "@earendil-works/pi-ai";
 import type { ModelWithKey } from "./types.js";
 
 export async function resolveModelWithApiKey(
@@ -16,8 +16,15 @@ export async function resolveModelWithApiKey(
 	}
 
 	for (const model of candidates) {
-		const apiKey = await ctx.modelRegistry.getApiKey(model);
-		if (apiKey) return { model, apiKey };
+		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+		if (auth.ok && auth.apiKey) {
+			return {
+				model,
+				apiKey: auth.apiKey,
+				headers: auth.headers,
+				env: auth.env,
+			};
+		}
 	}
 
 	return undefined;

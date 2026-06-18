@@ -1,11 +1,12 @@
-import type { ExtensionContext, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
-import { streamSimple } from "@mariozechner/pi-ai";
-import type { Context } from "@mariozechner/pi-ai";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { streamSimple } from "@earendil-works/pi-ai";
+import type { Context } from "@earendil-works/pi-ai";
 import type {
 	DebugLogger,
 	PreflightConfig,
 	RuleContextSnapshot,
 	RuleSuggestionAttempt,
+	ToolPreflightMetadata,
 	ToolCallSummary,
 	ToolCallsContext,
 } from "./types.js";
@@ -54,6 +55,8 @@ export async function buildRuleSuggestion(
 	try {
 		const response = await streamSimple(modelWithKey.model, ruleContext, {
 			apiKey: modelWithKey.apiKey,
+			headers: modelWithKey.headers,
+			env: modelWithKey.env,
 			signal,
 		});
 		for await (const _ of response) {

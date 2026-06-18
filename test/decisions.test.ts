@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ExtensionContext, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
-import type { Context } from "@mariozechner/pi-ai";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Context } from "@earendil-works/pi-ai";
 import type {
 	PermissionsState,
 	PolicyRule,
@@ -8,6 +8,7 @@ import type {
 	ToolCallSummary,
 	ToolCallsContext,
 	ToolPolicyDecision,
+	ToolPreflightMetadata,
 } from "../preflight/types.js";
 import {
 	resolveDeterministicDecisionForToolCall,

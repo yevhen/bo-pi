@@ -1,6 +1,6 @@
 {
   "name": "@yevhen.b/pi-macos-theme-sync",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "description": "Sync Pi's theme with macOS appearance changes.",
   "license": "MIT",
   "repository": {
@@ -23,6 +23,6 @@
     ]
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*"
   }
 }

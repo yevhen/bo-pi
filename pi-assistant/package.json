@@ -1,6 +1,6 @@
 {
   "name": "@yevhen.b/pi-assistant",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "description": "Pi assistant workflow extensions for dialog-oriented commands and UI.",
   "license": "MIT",
   "repository": {
@@ -24,7 +24,8 @@
     ]
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
   },
   "dependencies": {
     "rehype-stringify": "^10.0.1",

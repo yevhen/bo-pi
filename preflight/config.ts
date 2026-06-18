@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { Api, Model } from "@mariozechner/pi-ai";
-import type { KeyId } from "@mariozechner/pi-tui";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { KeyId } from "@earendil-works/pi-tui";
 import { expandTilde } from "./utils/path.js";
 import type { ApprovalMode, ModelRef, PreflightConfig, SessionConfigEntryData } from "./types.js";
 

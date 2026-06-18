@@ -1,6 +1,11 @@
-import type { ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
-import type { Api, Context, Model } from "@mariozechner/pi-ai";
-import type { KeyId } from "@mariozechner/pi-tui";
+import type { Api, Context, Model, ProviderEnv } from "@earendil-works/pi-ai";
+import type { KeyId } from "@earendil-works/pi-tui";
+
+export interface ToolPreflightMetadata {
+	summary: string;
+	destructive: boolean;
+	scope?: string[];
+}
 
 export interface ToolCallSummary {
 	id: string;
@@ -154,4 +159,9 @@ export type ApprovalDecision =
 	| { action: "deny" }
 	| { action: "custom-rule"; rule: string };
 
-export type ModelWithKey = { model: Model<Api>; apiKey: string };
+export type ModelWithKey = {
+	model: Model<Api>;
+	apiKey: string;
+	headers?: Record<string, string>;
+	env?: ProviderEnv;
+};

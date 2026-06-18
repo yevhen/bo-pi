@@ -1,7 +1,7 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { convertToLlm } from "@mariozechner/pi-coding-agent";
-import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@mariozechner/pi-coding-agent";
-import type { Message } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { convertToLlm } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
+import type { Message } from "@earendil-works/pi-ai";
 import {
 	SESSION_ENTRY_TYPE,
 	formatApprovalMode,

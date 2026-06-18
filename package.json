@@ -1,6 +1,6 @@
 {
   "name": "@yevhen.b/bo-pi",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "description": "Umbrella Pi package bundling preflight, Pi Assistant, and macOS theme sync.",
   "license": "MIT",
   "repository": {
@@ -26,9 +26,10 @@
     ]
   },
   "peerDependencies": {
-    "@mariozechner/pi-agent-core": "*",
-    "@mariozechner/pi-ai": "*",
-    "@mariozechner/pi-coding-agent": "*"
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
   },
   "scripts": {
     "test": "vitest run",

@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { Api, Model } from "@mariozechner/pi-ai";
-import { streamSimple } from "@mariozechner/pi-ai";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import { streamSimple } from "@earendil-works/pi-ai";
 import {
 	evaluateRuleConsistency,
 	parseRuleConsistencyResponse,
 } from "../preflight/rule-consistency.js";
 import type { PreflightConfig, RuleContextSnapshot, ToolCallsContext } from "../preflight/types.js";
 
-vi.mock("@mariozechner/pi-ai", async () => {
-	const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+vi.mock("@earendil-works/pi-ai", async () => {
+	const actual = await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
 	return {
 		...actual,
 		streamSimple: vi.fn(),
@@ -47,7 +47,9 @@ function createContext(withApiKey: boolean): ExtensionContext {
 		model,
 		modelRegistry: {
 			find: vi.fn(),
-			getApiKey: vi.fn().mockResolvedValue(withApiKey ? "test-key" : undefined),
+			getApiKeyAndHeaders: vi
+				.fn()
+				.mockResolvedValue(withApiKey ? { ok: true, apiKey: "test-key" } : { ok: false, error: "missing" }),
 		},
 	} as unknown as ExtensionContext;
 }

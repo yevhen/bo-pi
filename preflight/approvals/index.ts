@@ -1,7 +1,8 @@
-import type { ExtensionContext, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
 	DebugLogger,
 	PreflightConfig,
+	ToolPreflightMetadata,
 	ToolCallSummary,
 	ToolCallsContext,
 	ToolDecision,

@@ -1,5 +1,5 @@
-import type { ExtensionContext, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder, keyHint, rawKeyHint } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, keyHint, rawKeyHint } from "@earendil-works/pi-coding-agent";
 import {
 	Container,
 	Spacer,
@@ -8,7 +8,7 @@ import {
 	matchesKey,
 	type KeyId,
 	type TUI,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import { buildToolCallExplanation } from "../explain.js";
 import { buildRuleSuggestion } from "../rule-suggestions.js";
 import { isScopeOutsideWorkspace } from "../utils/path.js";
@@ -19,6 +19,7 @@ import type {
 	RuleConflictAction,
 	RuleConsistencyResult,
 	RuleContextSnapshot,
+	ToolPreflightMetadata,
 	ToolCallSummary,
 	ToolCallsContext,
 	ToolDecision,

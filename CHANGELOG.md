@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.0.10] - 2026-06-18
+
 ### Added
 - Add the standalone Pi Assistant extension package and bundle it into the umbrella `@yevhen.b/bo-pi` package.
 - Split docs so each extension now has its own README.
@@ -16,6 +18,9 @@
 - Keep the root package as a publishable umbrella bundle while standalone packages remain independently installable.
 - Validate published package contents with `npm pack --dry-run` in the release workflow.
 - Switch Pi Assistant Markdown conversion to the `remark` / `unified` stack for HTML and plain-text rendering, including GFM support.
+- Migrate every extension package to the latest `@earendil-works/pi-*` SDK package names.
+- Update preflight model auth resolution to use `getApiKeyAndHeaders()` so latest Pi provider headers and provider-scoped env continue to work.
+- Declare `@earendil-works/pi-tui` peer dependencies for packages that use Pi UI types or components.
 
 ### Fixed
 - Clear legacy npm auth tokens in the publish workflow so npm trusted publishing (OIDC) is used consistently.

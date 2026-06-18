@@ -1,6 +1,6 @@
 {
   "name": "@yevhen.b/pi-preflight",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "description": "Tool-call approvals and policy rules for Pi.",
   "license": "MIT",
   "repository": {
@@ -22,9 +22,10 @@
     ]
   },
   "peerDependencies": {
-    "@mariozechner/pi-agent-core": "*",
-    "@mariozechner/pi-ai": "*",
-    "@mariozechner/pi-coding-agent": "*"
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
   },
   "dependencies": {
     "ignore": "^7.0.5"

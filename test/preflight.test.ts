@@ -1,16 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { Api, Context, Model } from "@mariozechner/pi-ai";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Api, Context, Model } from "@earendil-works/pi-ai";
 import type { PreflightConfig, ToolCallSummary, ToolCallsContext } from "../preflight/types.js";
 import {
 	buildPreflightMetadata,
 	normalizePreflight,
 	parsePreflightResponse,
 } from "../preflight/preflight.js";
-import { streamSimple } from "@mariozechner/pi-ai";
+import { streamSimple } from "@earendil-works/pi-ai";
 
-vi.mock("@mariozechner/pi-ai", async () => {
-	const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+vi.mock("@earendil-works/pi-ai", async () => {
+	const actual = await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
 	return {
 		...actual,
 		streamSimple: vi.fn(),
@@ -36,7 +36,7 @@ function createContext(): ExtensionContext {
 		model,
 		modelRegistry: {
 			find: vi.fn(),
-			getApiKey: vi.fn().mockResolvedValue("test-key"),
+			getApiKeyAndHeaders: vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" }),
 		},
 	} as unknown as ExtensionContext;
 }

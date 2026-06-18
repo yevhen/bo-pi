@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ExtensionContext, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
-import type { Context } from "@mariozechner/pi-ai";
-import type { PreflightConfig, ToolCallsContext, ToolDecision } from "../preflight/types.js";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Context } from "@earendil-works/pi-ai";
+import type { PreflightConfig, ToolCallsContext, ToolDecision, ToolPreflightMetadata } from "../preflight/types.js";
 import { collectApprovals } from "../preflight/approvals/index.js";
 import {
 	requestApproval,

@@ -21,7 +21,7 @@
  *   - Works in any terminal (iTerm2, Terminal.app, Kitty, Alacritty, etc.)
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { spawn, execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";

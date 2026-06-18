@@ -1,11 +1,12 @@
-import type { ExtensionContext, ToolPreflightMetadata } from "@mariozechner/pi-coding-agent";
-import { streamSimple } from "@mariozechner/pi-ai";
-import type { Api, Context, Model } from "@mariozechner/pi-ai";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { streamSimple } from "@earendil-works/pi-ai";
+import type { Api, Context, Model, ProviderEnv } from "@earendil-works/pi-ai";
 import { normalizePolicyResult } from "./permissions/policy.js";
 import type {
 	DebugLogger,
 	PreflightAttempt,
 	PreflightConfig,
+	ToolPreflightMetadata,
 	ToolCallSummary,
 	ToolCallsContext,
 	ToolPolicyDecision,
@@ -63,6 +64,8 @@ export async function buildPreflightMetadata(
 			preflightContext,
 			modelWithKey.model,
 			modelWithKey.apiKey,
+			modelWithKey.headers,
+			modelWithKey.env,
 			logDebug,
 			attempt,
 		);
@@ -89,11 +92,13 @@ async function runPreflightAttempt(
 	preflightContext: Context,
 	model: Model<Api>,
 	apiKey: string,
+	headers: Record<string, string> | undefined,
+	env: ProviderEnv | undefined,
 	logDebug: DebugLogger,
 	attempt: number,
 ): Promise<PreflightAttempt> {
 	try {
-		const response = await streamSimple(model, preflightContext, { apiKey });
+		const response = await streamSimple(model, preflightContext, { apiKey, headers, env });
 		for await (const _ of response) {
 			// Drain stream to completion.
 		}

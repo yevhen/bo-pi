@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { DebugLogger, PreflightConfig } from "./types.js";
 
 const DEBUG_LOG_DIR = join(".pi", "preflight", "logs");

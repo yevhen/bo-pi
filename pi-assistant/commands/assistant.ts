@@ -1,6 +1,6 @@
 import * as path from "node:path";
-import type { AutocompleteItem } from "@mariozechner/pi-tui";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { AutocompleteItem } from "@earendil-works/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { copyRichTextToClipboard, copyTextToClipboard } from "../clipboard/copy.js";
 import { renderAssistantHtml } from "../render/html.js";

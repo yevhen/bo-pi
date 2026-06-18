@@ -1,7 +1,7 @@
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import type { SessionEntry } from "@mariozechner/pi-coding-agent";
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 
 import { getClipboardCommand, copyRichTextToClipboard, copyTextToClipboard } from "../pi-assistant/clipboard/copy.js";
